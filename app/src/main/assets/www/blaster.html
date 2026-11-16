@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Star Blaster</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Arrow keys move your ship. Hold OK to fire. Back returns to the menu.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+var TV3D = (function () {
+  var T = {}, ctx = TV.ctx, W = TV.W, H = TV.H, faces = [], cam = null, light = [-0.35, 0.8, 0.45], amb = 0.5, fogCol = [150, 180, 220], fogS = 80, fogE = 400;
+  var colCache = {};
+  function parse(c) {
+    if (typeof c !== 'string') return c;
+    if (colCache[c]) return colCache[c];
+    var v = [parseInt(c.substr(1, 2), 16), parseInt(c.substr(3, 2), 16), parseInt(c.substr(5, 2), 16)];
+    colCache[c] = v; return v;
+  }
+  T.parse = parse;
+  (function () { var m = Math.sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]); light = [light[0] / m, light[1] / m, light[2] / m]; })();
+  function norm3(v) { var m = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+
+  /* ---- unit shapes: arrays of faces; each face = array of [x,y,z], wound so the outside is counter-clockwise ---- */
+  function fixWinding(shape) {
+    for (var i = 0; i < shape.length; i++) {
+      var f = shape[i], a = f[0], b = f[1], c = f[2];
+      var n = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      var cx = 0, cy = 0, cz = 0, k;
+      for (k = 0; k < f.length; k++) { cx += f[k][0]; cy += f[k][1]; cz += f[k][2]; }
+      cx /= f.length; cy = cy / f.length - 0.05; cz /= f.length;     // shapes are centred on the origin
+      if (n[0] * cx + n[1] * cy + n[2] * cz < 0) f.reverse();
+    }
+    return shape;
+  }
+  var h = 0.5;
+  var CUBE = fixWinding([
+    [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]], [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]],
+    [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]], [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]],
+    [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]], [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  var PYR = fixWinding([
+    [[-h, -h, -h], [h, -h, -h], [0, h, 0]], [[h, -h, -h], [h, -h, h], [0, h, 0]], [[h, -h, h], [-h, -h, h], [0, h, 0]], [[-h, -h, h], [-h, -h, -h], [0, h, 0]],
+    [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  function prism(axis, sides) {
+    var out = [], ring = [], i;
+    for (i = 0; i < sides; i++) { var a = Math.PI * 2 * i / sides; ring.push([Math.cos(a) * h, Math.sin(a) * h]); }
+    function pt(p, along) { return axis === 0 ? [along, p[0], p[1]] : axis === 1 ? [p[0], along, p[1]] : [p[0], p[1], along]; }
+    for (i = 0; i < sides; i++) { var p0 = ring[i], p1 = ring[(i + 1) % sides]; out.push([pt(p0, -h), pt(p1, -h), pt(p1, h), pt(p0, h)]); }
+    var c0 = [], c1 = []; for (i = 0; i < sides; i++) { c0.push(pt(ring[i], -h)); c1.push(pt(ring[i], h)); }
+    out.push(c0, c1); return fixWinding(out);
+  }
+  T.CUBE = CUBE; T.PYR = PYR; T.PX = prism(0, 8); T.PY = prism(1, 8); T.PZ = prism(2, 8);
+
+  /* ---- camera ---- */
+  T.camera = function (pos, target, fovDeg) {
+    var f = norm3([target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]]);
+    var r = norm3(cross(f, [0, 1, 0])), u = cross(r, f);
+    cam = { p: pos, f: f, r: r, u: u, focal: (H / 2) / Math.tan(fovDeg * Math.PI / 360) };
+  };
+  T.fog = function (col, s, e) { fogCol = parse(col); fogS = s; fogE = e; };
+  T.light = function (ambient) { amb = ambient; };
+  T.view = function (p) {       // world -> [x, y, depth] in camera space (before projection)
+    var vx = p[0] - cam.p[0], vy = p[1] - cam.p[1], vz = p[2] - cam.p[2];
+    return [vx * cam.r[0] + vy * cam.r[1] + vz * cam.r[2], vx * cam.u[0] + vy * cam.u[1] + vz * cam.u[2], vx * cam.f[0] + vy * cam.f[1] + vz * cam.f[2]];
+  };
+  /* world point -> screen [x, y, depth], or null when behind the camera */
+  T.project = function (p) {
+    var v = T.view(p); if (v[2] < 0.5) return null;
+    var k = cam.focal / v[2]; return [W / 2 + v[0] * k, H / 2 - v[1] * k, v[2]];
+  };
+  T.scale = function (z) { return cam.focal / z; };
+
+  function clipNear(pts) {           // Sutherland-Hodgman against z = near in view space
+    var out = [], n = pts.length, i, near = 0.6;
+    for (i = 0; i < n; i++) {
+      var a = pts[i], b = pts[(i + 1) % n], ina = a[2] >= near, inb = b[2] >= near;
+      if (ina) out.push(a);
+      if (ina !== inb) { var t = (near - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, near]); }
+    }
+    return out;
+  }
+  function paint(g, pts, css) {      // pts in view space
+    var q = clipNear(pts); if (q.length < 3) return;
+    g.beginPath();
+    for (var i = 0; i < q.length; i++) {
+      var k = cam.focal / q[i][2], x = W / 2 + q[i][0] * k, y = H / 2 - q[i][1] * k;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.closePath(); g.fillStyle = css; g.fill(); g.lineWidth = 0.7; g.strokeStyle = css; g.stroke();
+  }
+  function fogMix(col, d) {
+    var f = (d - fogS) / (fogE - fogS); f = f < 0 ? 0 : f > 1 ? 1 : f;
+    return 'rgb(' + Math.round(col[0] + (fogCol[0] - col[0]) * f) + ',' + Math.round(col[1] + (fogCol[1] - col[1]) * f) + ',' + Math.round(col[2] + (fogCol[2] - col[2]) * f) + ')';
+  }
+
+  /* ---- drawing a shape: queue its visible faces, flush() sorts and paints them ---- */
+  T.shape = function (shape, x, y, z, sx, sy, sz, color, emit, yaw) {
+    var col = parse(color), cs = 1, sn = 0, i, k;
+    if (yaw) { cs = Math.cos(yaw); sn = Math.sin(yaw); }
+    for (i = 0; i < shape.length; i++) {
+      var f = shape[i], vs = [], vw = [];
+      for (k = 0; k < f.length; k++) {
+        var px = f[k][0] * sx, py = f[k][1] * sy, pz = f[k][2] * sz;
+        var wx = x + px * cs + pz * sn, wz = z - px * sn + pz * cs, wy = y + py;
+        vw.push([wx, wy, wz]);
+      }
+      var a = vw[0], b = vw[1], c = vw[2];
+      var n = norm3(cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]));
+      var ccx = 0, ccy = 0, ccz = 0; for (k = 0; k < vw.length; k++) { ccx += vw[k][0]; ccy += vw[k][1]; ccz += vw[k][2]; }
+      ccx /= vw.length; ccy /= vw.length; ccz /= vw.length;
+      if (n[0] * (cam.p[0] - ccx) + n[1] * (cam.p[1] - ccy) + n[2] * (cam.p[2] - ccz) <= 0) continue;     // back face
+      var d = T.view([ccx, ccy, ccz]);
+      if (d[2] < 0.6 && d[2] > -200) { /* partly behind: still try, clipping handles it */ }
+      for (k = 0; k < vw.length; k++) vs.push(T.view(vw[k]));
+      var allBehind = true; for (k = 0; k < vs.length; k++) if (vs[k][2] >= 0.6) allBehind = false;
+      if (allBehind) continue;
+      var l = amb + (1 - amb) * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+      if (emit) l = l + (1 - l) * emit;
+      faces.push({ d: d[2], v: vs, c: [col[0] * l, col[1] * l, col[2] * l] });
+    }
+  };
+  T.box = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(CUBE, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.pyramid = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(PYR, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismY = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PY, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismX = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PX, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismZ = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PZ, x, y, z, sx, sy, sz, color, emit, yaw); };
+
+  T.flush = function () {
+    faces.sort(function (a, b) { return b.d - a.d; });
+    for (var i = 0; i < faces.length; i++) { var f = faces[i]; paint(ctx, f.v, fogMix(f.c, f.d)); }
+    faces.length = 0;
+  };
+  /* A flat quad on the ground (or any plane) painted immediately, before the sorted shapes. corners in world space. */
+  T.quad = function (a, b, c, d, color, g) {
+    var col = parse(color); var vs = [T.view(a), T.view(b), T.view(c), T.view(d)];
+    var cz = (vs[0][2] + vs[1][2] + vs[2][2] + vs[3][2]) / 4;
+    paint(g || ctx, vs, typeof color === 'string' && color.charAt(0) !== '#' ? color : fogMix([col[0], col[1], col[2]], cz));
+  };
+  T.shadow = function (x, z, sx, sz, y) {
+    var yy = y || 0.02, vs = [T.view([x - sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z + sz / 2 + 0.25]), T.view([x - sx / 2 + 0.3, yy, z + sz / 2 + 0.25])];
+    paint(ctx, vs, 'rgba(5,8,25,.35)');
+  };
+  T.sky = function (top, bottom, horizonY) {
+    var g = ctx.createLinearGradient(0, 0, 0, horizonY || H * 0.6); g.addColorStop(0, top); g.addColorStop(1, bottom);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  };
+  /* Draw static scenery once into an offscreen canvas and reuse it every frame (the camera must not move). */
+  var layer = null, layerKey = '';
+  T.cached = function (key, fn) {
+    if (!layer || layerKey !== key) {
+      layer = document.createElement('canvas'); layer.width = W; layer.height = H; layerKey = key;
+      var g = layer.getContext('2d'); fn(g);
+    }
+    ctx.drawImage(layer, 0, 0);
+  };
+  T.uncache = function () { layer = null; layerKey = ''; };
+  T.quadTo = function (g, a, b, c, d, color) { T.quad(a, b, c, d, color, g); };
+  T.ground = function (cx, cz, hw, hd, color) { T.quad([cx - hw, 0, cz + hd], [cx + hw, 0, cz + hd], [cx + hw, 0, cz - hd], [cx - hw, 0, cz - hd], color); };
+  T.cam = function () { return cam; };
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H;
+  var state = 'title', ship, shots = [], foes = [], bits = [], stars = [], t, score, lives, wave, spawnT, fireT, best = TV.store.get('blaster_best', 0), msg = '', msgT = 0, inv = 0;
+  for (var i = 0; i < 70; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, s: 20 + Math.random() * 80, r: Math.random() < 0.2 ? 2 : 1 });
+
+  function newGame() { ship = { x: W / 2, y: H - 70, vx: 0, vy: 0 }; shots = []; foes = []; bits = []; score = 0; lives = 3; wave = 1; t = 0; spawnT = 1; fireT = 0; inv = 1.5; state = 'play'; banner('WAVE 1'); }
+  function banner(s) { msg = s; msgT = 1.6; }
+  function boom(x, y, col, n) { for (var i = 0; i < n; i++) { var a = Math.random() * 6.3, s = TV.rnd(40, 240); bits.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: TV.rnd(0.3, 0.8), col: col }); } }
+
+  TV.on(function (type, key, rep) {
+    if (type !== 'down' || rep) return;
+    if (key === 'back') { if (state === 'play') state = 'pause'; else TV.exit(); return; }
+    if (state === 'title' || state === 'over') { if (key === 'ok' || key === 'start') newGame(); return; }
+    if (state === 'pause') { if (key === 'ok' || key === 'start') state = 'play'; return; }
+    if (key === 'start') state = 'pause';
+  });
+
+  function spawn() {
+    var kind = Math.random() < 0.25 + wave * 0.03 ? 1 : 0, x = TV.rnd(60, W - 60);
+    foes.push({ x: x, x0: x, y: -30, kind: kind, hp: kind ? 3 : 1, ph: Math.random() * 6, spd: 70 + wave * 9 + (kind ? 0 : 25), t: 0, shoot: TV.rnd(1, 3) });
+  }
+  var foeShots = [];
+  function update(dt) {
+    gridT += dt * 28;
+    for (var s = 0; s < stars.length; s++) { stars[s].y += stars[s].s * dt; if (stars[s].y > H) { stars[s].y = 0; stars[s].x = Math.random() * W; } }
+    for (var b = bits.length - 1; b >= 0; b--) { var p = bits[b]; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; if (p.life <= 0) bits.splice(b, 1); }
+    if (state !== 'play') return;
+    t += dt; if (msgT > 0) msgT -= dt; if (inv > 0) inv -= dt;
+    var dx = (TV.held.right ? 1 : 0) - (TV.held.left ? 1 : 0), dy = (TV.held.down ? 1 : 0) - (TV.held.up ? 1 : 0);
+    ship.vx += (dx * 360 - ship.vx) * Math.min(1, 12 * dt); ship.vy += (dy * 300 - ship.vy) * Math.min(1, 12 * dt);
+    ship.x = TV.clamp(ship.x + ship.vx * dt, 24, W - 24); ship.y = TV.clamp(ship.y + ship.vy * dt, H * 0.45, H - 36);
+    fireT -= dt;
+    if (TV.held.ok && fireT <= 0) { fireT = 0.17; shots.push({ x: ship.x - 10, y: ship.y - 18 }, { x: ship.x + 10, y: ship.y - 18 }); TV.beep(880, 0.05, 'square', 0.04, 440); }
+    for (var i = shots.length - 1; i >= 0; i--) { shots[i].y -= 620 * dt; if (shots[i].y < -20) shots.splice(i, 1); }
+    spawnT -= dt;
+    if (spawnT <= 0) { spawn(); spawnT = Math.max(0.35, 1.2 - wave * 0.07); }
+    for (i = foes.length - 1; i >= 0; i--) {
+      var f = foes[i]; f.t += dt; f.y += f.spd * dt; f.x = f.x0 + Math.sin(f.t * 2 + f.ph) * (f.kind ? 70 : 40);
+      if (f.kind) { f.shoot -= dt; if (f.shoot <= 0) { f.shoot = 1.6; var ax = ship.x - f.x, ay = ship.y - f.y, l = Math.sqrt(ax * ax + ay * ay) || 1; foeShots.push({ x: f.x, y: f.y, vx: ax / l * 200, vy: ay / l * 200 }); } }
+      var hit = false;
+      for (var j = shots.length - 1; j >= 0; j--) {
+        if (Math.abs(shots[j].x - f.x) < 22 && Math.abs(shots[j].y - f.y) < 20) { shots.splice(j, 1); f.hp--; hit = true; if (f.hp <= 0) break; }
+      }
+      if (hit && f.hp <= 0) { score += f.kind ? 50 : 20; boom(f.x, f.y, f.kind ? '#ff7a45' : '#ffd21f', 14); TV.beep(200, 0.15, 'sawtooth', 0.08, 60); foes.splice(i, 1); continue; }
+      if (inv <= 0 && Math.abs(f.x - ship.x) < 26 && Math.abs(f.y - ship.y) < 24) { foes.splice(i, 1); hurt(); continue; }
+      if (f.y > H + 30) foes.splice(i, 1);
+    }
+    for (i = foeShots.length - 1; i >= 0; i--) {
+      var q = foeShots[i]; q.x += q.vx * dt; q.y += q.vy * dt;
+      if (inv <= 0 && Math.abs(q.x - ship.x) < 16 && Math.abs(q.y - ship.y) < 18) { foeShots.splice(i, 1); hurt(); continue; }
+      if (q.y > H + 20 || q.y < -20 || q.x < -20 || q.x > W + 20) foeShots.splice(i, 1);
+    }
+    var nw = 1 + Math.floor(score / 400);
+    if (nw > wave) { wave = nw; banner('WAVE ' + wave); TV.beep(700, 0.3, 'square', 0.1, 1200); }
+  }
+  function hurt() {
+    lives--; inv = 2; boom(ship.x, ship.y, '#44b8ff', 22); TV.beep(120, 0.4, 'sawtooth', 0.16, 40);
+    if (lives <= 0) { state = 'over'; foeShots = []; if (score > best) { best = score; TV.store.set('blaster_best', best); } }
+  }
+  var KX = 0.04, KZ = 0.07, gridT = 0;
+  function X(x) { return (x - W / 2) * KX; }
+  function Z(y) { return (y - H) * KZ; }
+  function ship3(G, x, z, tilt, blink) {
+    if (blink) return;
+    G.pyramid(x, 0.9, z - 0.4, 1.5, 2.6, 3.0, '#44b8ff', 0, 0);            // fuselage (points up, so lay it as a wedge)
+    G.box(x, 0.8, z + 0.3, 1.0, 0.5, 2.4, '#f3efe4');
+    G.box(x - 1.6, 0.6, z + 0.6, 1.8, 0.2, 1.6, '#2b7fd0'); G.box(x + 1.6, 0.6, z + 0.6, 1.8, 0.2, 1.6, '#2b7fd0');
+    G.box(x, 0.7, z + 1.9, 0.5, 0.5, 0.9 + Math.random() * 0.6, '#ffb02e', 1);
+  }
+  function drawShip2(x, y) {
+    c.fillStyle = '#44b8ff'; c.beginPath(); c.moveTo(x, y - 24); c.lineTo(x + 20, y + 16); c.lineTo(x, y + 8); c.lineTo(x - 20, y + 16); c.closePath(); c.fill();
+    c.fillStyle = '#f3efe4'; c.beginPath(); c.moveTo(x, y - 12); c.lineTo(x + 6, y + 4); c.lineTo(x - 6, y + 4); c.closePath(); c.fill();
+    c.fillStyle = '#ffb02e'; c.fillRect(x - 4, y + 9, 8, 6 + Math.random() * 8);
+  }
+  function draw2() {
+    c.fillStyle = '#070b24'; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#fff'; for (var i = 0; i < stars.length; i++) c.fillRect(stars[i].x, stars[i].y, stars[i].r, stars[i].r + stars[i].s / 60);
+    for (i = 0; i < foes.length; i++) {
+      var f = foes[i];
+      c.fillStyle = f.kind ? '#ff7a45' : '#a96bff'; c.beginPath(); c.moveTo(f.x - 22, f.y - 12); c.lineTo(f.x + 22, f.y - 12); c.lineTo(f.x, f.y + 18); c.closePath(); c.fill();
+      c.fillStyle = '#fff'; c.fillRect(f.x - 9, f.y - 7, 5, 5); c.fillRect(f.x + 4, f.y - 7, 5, 5);
+    }
+    c.fillStyle = '#ffd21f'; if (shots) for (i = 0; i < shots.length; i++) c.fillRect(shots[i].x - 2, shots[i].y - 8, 4, 14);
+    c.fillStyle = '#ff5a4e'; for (i = 0; i < foeShots.length; i++) { c.beginPath(); c.arc(foeShots[i].x, foeShots[i].y, 5, 0, 6.3); c.fill(); }
+    if (ship && state !== 'over' && (inv <= 0 || Math.floor(inv * 12) % 2 === 0)) drawShip2(ship.x, ship.y);
+    for (i = 0; i < bits.length; i++) { c.globalAlpha = Math.max(0, bits[i].life); c.fillStyle = bits[i].col; c.fillRect(bits[i].x, bits[i].y, 4, 4); } c.globalAlpha = 1;
+    TV.text('SCORE ' + (score || 0), 16, 20, 22, '#fff', 'left');
+    var h = ''; for (i = 0; i < (lives || 0); i++) h += '♥ ';
+    TV.text(h, W - 16, 20, 24, '#ff5a4e', 'right');
+    if (msgT > 0 && state === 'play') TV.text(msg, W / 2, H * 0.3, 56, '#ffd21f');
+    if (state === 'title') TV.panel('STAR BLASTER', ['Press OK to start', 'Arrows move, hold OK to fire', 'Best ' + best], '#44b8ff');
+    else if (state === 'pause') TV.panel('PAUSED', ['OK: resume'], '#ffd21f');
+    else if (state === 'over') TV.panel('GAME OVER', ['Score ' + score + '   Best ' + best, 'Press OK to play again', 'Back: menu'], '#ff5a4e');
+  }
+  var draw = TV.pick(draw2, draw3);
+  function draw3() {
+    var G = TV3D, i, sx = ship ? ship.x : W / 2, sz = ship ? Z(ship.y) : 0, cxw = X(sx) * 0.6;
+    G.sky('#04061a', '#1a2a66', H * 0.55);
+    c.fillStyle = '#fff'; for (i = 0; i < stars.length; i++) if (stars[i].y < H * 0.5) c.fillRect(stars[i].x, stars[i].y * 0.6, stars[i].r, stars[i].r);
+    G.camera([cxw, 10, sz + 15], [cxw, 0, sz - 24], 55); G.fog('#1a2a66', 40, 95); G.light(0.5);
+    // scrolling floor grid
+    var off = gridT % 6, k;
+    G.ground(cxw, sz - 40, 60, 60, '#0b1236');
+    for (k = -12; k <= 12; k++) G.quad([k * 5 - 0.06, 0.02, sz + 20], [k * 5 + 0.06, 0.02, sz + 20], [k * 5 + 0.06, 0.02, sz - 90], [k * 5 - 0.06, 0.02, sz - 90], '#2a3d99');
+    for (k = 0; k < 20; k++) { var zz = sz + 14 - k * 6 + off; G.quad([-70, 0.02, zz + 0.06], [70, 0.02, zz + 0.06], [70, 0.02, zz - 0.06], [-70, 0.02, zz - 0.06], '#2a3d99'); }
+    for (i = 0; i < foes.length; i++) {
+      var f = foes[i], fx = X(f.x), fz = Z(f.y);
+      G.shadow(fx, fz, 2.4, 2.4);
+      if (f.kind) { G.prismY(fx, 1.6, fz, 3.0, 1.1, 3.0, '#ff7a45'); G.pyramid(fx, 2.6, fz, 2.0, 1.4, 2.0, '#ffb26b'); G.box(fx, 1.7, fz + 1.5, 0.6, 0.6, 0.2, '#fff', 1); }
+      else { G.pyramid(fx, 1.5, fz, 2.4, 2.6, 2.4, '#a96bff', 0, f.t * 3); G.box(fx - 0.4, 1.6, fz + 0.9, 0.3, 0.3, 0.2, '#fff', 1); G.box(fx + 0.4, 1.6, fz + 0.9, 0.3, 0.3, 0.2, '#fff', 1); }
+    }
+    for (i = 0; i < shots.length; i++) G.box(X(shots[i].x), 1, Z(shots[i].y), 0.22, 0.22, 1.4, '#ffd21f', 1);
+    for (i = 0; i < foeShots.length; i++) G.prismY(X(foeShots[i].x), 1.1, Z(foeShots[i].y), 0.7, 0.7, 0.7, '#ff5a4e', 1);
+    for (i = 0; i < bits.length; i++) G.box(X(bits[i].x), 1 + (1 - bits[i].life) * 1.5, Z(bits[i].y), 0.3, 0.3, 0.3, bits[i].col, 1);
+    if (ship && state !== 'over') { G.shadow(X(ship.x), sz, 3.4, 3.4); ship3(G, X(ship.x), sz, 0, inv > 0 && Math.floor(inv * 12) % 2 !== 0); }
+    G.flush();
+    TV.text('SCORE ' + (score || 0), 16, 20, 22, '#fff', 'left');
+    var h = ''; for (i = 0; i < (lives || 0); i++) h += '\u2665 ';
+    TV.text(h, W - 16, 20, 24, '#ff5a4e', 'right');
+    if (msgT > 0 && state === 'play') TV.text(msg, W / 2, H * 0.3, 56, '#ffd21f');
+    if (state === 'title') TV.panel('STAR BLASTER 3D', ['Press OK to start', 'Arrows move, hold OK to fire', 'Best ' + best], '#44b8ff');
+    else if (state === 'pause') TV.panel('PAUSED', ['OK: resume'], '#ffd21f');
+    else if (state === 'over') TV.panel('GAME OVER', ['Score ' + score + '   Best ' + best, 'Press OK to play again', 'Back: menu'], '#ff5a4e');
+  }
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

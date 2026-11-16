@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>2048</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Arrow keys slide the tiles. P starts a new game. Back returns to the menu.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+var TV3D = (function () {
+  var T = {}, ctx = TV.ctx, W = TV.W, H = TV.H, faces = [], cam = null, light = [-0.35, 0.8, 0.45], amb = 0.5, fogCol = [150, 180, 220], fogS = 80, fogE = 400;
+  var colCache = {};
+  function parse(c) {
+    if (typeof c !== 'string') return c;
+    if (colCache[c]) return colCache[c];
+    var v = [parseInt(c.substr(1, 2), 16), parseInt(c.substr(3, 2), 16), parseInt(c.substr(5, 2), 16)];
+    colCache[c] = v; return v;
+  }
+  T.parse = parse;
+  (function () { var m = Math.sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]); light = [light[0] / m, light[1] / m, light[2] / m]; })();
+  function norm3(v) { var m = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+
+  /* ---- unit shapes: arrays of faces; each face = array of [x,y,z], wound so the outside is counter-clockwise ---- */
+  function fixWinding(shape) {
+    for (var i = 0; i < shape.length; i++) {
+      var f = shape[i], a = f[0], b = f[1], c = f[2];
+      var n = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      var cx = 0, cy = 0, cz = 0, k;
+      for (k = 0; k < f.length; k++) { cx += f[k][0]; cy += f[k][1]; cz += f[k][2]; }
+      cx /= f.length; cy = cy / f.length - 0.05; cz /= f.length;     // shapes are centred on the origin
+      if (n[0] * cx + n[1] * cy + n[2] * cz < 0) f.reverse();
+    }
+    return shape;
+  }
+  var h = 0.5;
+  var CUBE = fixWinding([
+    [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]], [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]],
+    [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]], [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]],
+    [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]], [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  var PYR = fixWinding([
+    [[-h, -h, -h], [h, -h, -h], [0, h, 0]], [[h, -h, -h], [h, -h, h], [0, h, 0]], [[h, -h, h], [-h, -h, h], [0, h, 0]], [[-h, -h, h], [-h, -h, -h], [0, h, 0]],
+    [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  function prism(axis, sides) {
+    var out = [], ring = [], i;
+    for (i = 0; i < sides; i++) { var a = Math.PI * 2 * i / sides; ring.push([Math.cos(a) * h, Math.sin(a) * h]); }
+    function pt(p, along) { return axis === 0 ? [along, p[0], p[1]] : axis === 1 ? [p[0], along, p[1]] : [p[0], p[1], along]; }
+    for (i = 0; i < sides; i++) { var p0 = ring[i], p1 = ring[(i + 1) % sides]; out.push([pt(p0, -h), pt(p1, -h), pt(p1, h), pt(p0, h)]); }
+    var c0 = [], c1 = []; for (i = 0; i < sides; i++) { c0.push(pt(ring[i], -h)); c1.push(pt(ring[i], h)); }
+    out.push(c0, c1); return fixWinding(out);
+  }
+  T.CUBE = CUBE; T.PYR = PYR; T.PX = prism(0, 8); T.PY = prism(1, 8); T.PZ = prism(2, 8);
+
+  /* ---- camera ---- */
+  T.camera = function (pos, target, fovDeg) {
+    var f = norm3([target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]]);
+    var r = norm3(cross(f, [0, 1, 0])), u = cross(r, f);
+    cam = { p: pos, f: f, r: r, u: u, focal: (H / 2) / Math.tan(fovDeg * Math.PI / 360) };
+  };
+  T.fog = function (col, s, e) { fogCol = parse(col); fogS = s; fogE = e; };
+  T.light = function (ambient) { amb = ambient; };
+  T.view = function (p) {       // world -> [x, y, depth] in camera space (before projection)
+    var vx = p[0] - cam.p[0], vy = p[1] - cam.p[1], vz = p[2] - cam.p[2];
+    return [vx * cam.r[0] + vy * cam.r[1] + vz * cam.r[2], vx * cam.u[0] + vy * cam.u[1] + vz * cam.u[2], vx * cam.f[0] + vy * cam.f[1] + vz * cam.f[2]];
+  };
+  /* world point -> screen [x, y, depth], or null when behind the camera */
+  T.project = function (p) {
+    var v = T.view(p); if (v[2] < 0.5) return null;
+    var k = cam.focal / v[2]; return [W / 2 + v[0] * k, H / 2 - v[1] * k, v[2]];
+  };
+  T.scale = function (z) { return cam.focal / z; };
+
+  function clipNear(pts) {           // Sutherland-Hodgman against z = near in view space
+    var out = [], n = pts.length, i, near = 0.6;
+    for (i = 0; i < n; i++) {
+      var a = pts[i], b = pts[(i + 1) % n], ina = a[2] >= near, inb = b[2] >= near;
+      if (ina) out.push(a);
+      if (ina !== inb) { var t = (near - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, near]); }
+    }
+    return out;
+  }
+  function paint(g, pts, css) {      // pts in view space
+    var q = clipNear(pts); if (q.length < 3) return;
+    g.beginPath();
+    for (var i = 0; i < q.length; i++) {
+      var k = cam.focal / q[i][2], x = W / 2 + q[i][0] * k, y = H / 2 - q[i][1] * k;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.closePath(); g.fillStyle = css; g.fill(); g.lineWidth = 0.7; g.strokeStyle = css; g.stroke();
+  }
+  function fogMix(col, d) {
+    var f = (d - fogS) / (fogE - fogS); f = f < 0 ? 0 : f > 1 ? 1 : f;
+    return 'rgb(' + Math.round(col[0] + (fogCol[0] - col[0]) * f) + ',' + Math.round(col[1] + (fogCol[1] - col[1]) * f) + ',' + Math.round(col[2] + (fogCol[2] - col[2]) * f) + ')';
+  }
+
+  /* ---- drawing a shape: queue its visible faces, flush() sorts and paints them ---- */
+  T.shape = function (shape, x, y, z, sx, sy, sz, color, emit, yaw) {
+    var col = parse(color), cs = 1, sn = 0, i, k;
+    if (yaw) { cs = Math.cos(yaw); sn = Math.sin(yaw); }
+    for (i = 0; i < shape.length; i++) {
+      var f = shape[i], vs = [], vw = [];
+      for (k = 0; k < f.length; k++) {
+        var px = f[k][0] * sx, py = f[k][1] * sy, pz = f[k][2] * sz;
+        var wx = x + px * cs + pz * sn, wz = z - px * sn + pz * cs, wy = y + py;
+        vw.push([wx, wy, wz]);
+      }
+      var a = vw[0], b = vw[1], c = vw[2];
+      var n = norm3(cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]));
+      var ccx = 0, ccy = 0, ccz = 0; for (k = 0; k < vw.length; k++) { ccx += vw[k][0]; ccy += vw[k][1]; ccz += vw[k][2]; }
+      ccx /= vw.length; ccy /= vw.length; ccz /= vw.length;
+      if (n[0] * (cam.p[0] - ccx) + n[1] * (cam.p[1] - ccy) + n[2] * (cam.p[2] - ccz) <= 0) continue;     // back face
+      var d = T.view([ccx, ccy, ccz]);
+      if (d[2] < 0.6 && d[2] > -200) { /* partly behind: still try, clipping handles it */ }
+      for (k = 0; k < vw.length; k++) vs.push(T.view(vw[k]));
+      var allBehind = true; for (k = 0; k < vs.length; k++) if (vs[k][2] >= 0.6) allBehind = false;
+      if (allBehind) continue;
+      var l = amb + (1 - amb) * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+      if (emit) l = l + (1 - l) * emit;
+      faces.push({ d: d[2], v: vs, c: [col[0] * l, col[1] * l, col[2] * l] });
+    }
+  };
+  T.box = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(CUBE, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.pyramid = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(PYR, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismY = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PY, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismX = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PX, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismZ = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PZ, x, y, z, sx, sy, sz, color, emit, yaw); };
+
+  T.flush = function () {
+    faces.sort(function (a, b) { return b.d - a.d; });
+    for (var i = 0; i < faces.length; i++) { var f = faces[i]; paint(ctx, f.v, fogMix(f.c, f.d)); }
+    faces.length = 0;
+  };
+  /* A flat quad on the ground (or any plane) painted immediately, before the sorted shapes. corners in world space. */
+  T.quad = function (a, b, c, d, color, g) {
+    var col = parse(color); var vs = [T.view(a), T.view(b), T.view(c), T.view(d)];
+    var cz = (vs[0][2] + vs[1][2] + vs[2][2] + vs[3][2]) / 4;
+    paint(g || ctx, vs, typeof color === 'string' && color.charAt(0) !== '#' ? color : fogMix([col[0], col[1], col[2]], cz));
+  };
+  T.shadow = function (x, z, sx, sz, y) {
+    var yy = y || 0.02, vs = [T.view([x - sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z + sz / 2 + 0.25]), T.view([x - sx / 2 + 0.3, yy, z + sz / 2 + 0.25])];
+    paint(ctx, vs, 'rgba(5,8,25,.35)');
+  };
+  T.sky = function (top, bottom, horizonY) {
+    var g = ctx.createLinearGradient(0, 0, 0, horizonY || H * 0.6); g.addColorStop(0, top); g.addColorStop(1, bottom);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  };
+  /* Draw static scenery once into an offscreen canvas and reuse it every frame (the camera must not move). */
+  var layer = null, layerKey = '';
+  T.cached = function (key, fn) {
+    if (!layer || layerKey !== key) {
+      layer = document.createElement('canvas'); layer.width = W; layer.height = H; layerKey = key;
+      var g = layer.getContext('2d'); fn(g);
+    }
+    ctx.drawImage(layer, 0, 0);
+  };
+  T.uncache = function () { layer = null; layerKey = ''; };
+  T.quadTo = function (g, a, b, c, d, color) { T.quad(a, b, c, d, color, g); };
+  T.ground = function (cx, cz, hw, hd, color) { T.quad([cx - hw, 0, cz + hd], [cx + hw, 0, cz + hd], [cx + hw, 0, cz - hd], [cx - hw, 0, cz - hd], color); };
+  T.cam = function () { return cam; };
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H, N = 4, SZ = 100, GAPX = 10, OX = (W - (N * SZ + (N + 1) * GAPX)) / 2, OY = 62;
+  var grid, score, best = TV.store.get('g2048_best', 0), state = 'play', won = false, keepGoing = false, pop = {}, spawnKey = '';
+  var COL = { 0: '#26346a', 2: '#eee4da', 4: '#ede0c8', 8: '#f2b179', 16: '#f59563', 32: '#f67c5f', 64: '#f65e3b', 128: '#edcf72', 256: '#edcc61', 512: '#edc850', 1024: '#edc53f', 2048: '#edc22e' };
+
+  function empty() { var g = []; for (var y = 0; y < N; y++) { g.push([]); for (var x = 0; x < N; x++) g[y].push(0); } return g; }
+  function addTile() {
+    var free = []; for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) if (!grid[y][x]) free.push([x, y]);
+    if (!free.length) return; var f = free[Math.floor(Math.random() * free.length)];
+    grid[f[1]][f[0]] = Math.random() < 0.9 ? 2 : 4; pop[f[0] + ',' + f[1]] = 1;
+  }
+  function newGame() { grid = empty(); score = 0; won = false; keepGoing = false; state = 'play'; pop = {}; addTile(); addTile(); }
+  /* slide one line toward index 0, returns {line, gained} */
+  function slide(line) {
+    var a = [], i, gained = 0; for (i = 0; i < N; i++) if (line[i]) a.push(line[i]);
+    for (i = 0; i < a.length - 1; i++) if (a[i] === a[i + 1]) { a[i] *= 2; gained += a[i]; a.splice(i + 1, 1); }
+    while (a.length < N) a.push(0); return { line: a, gained: gained };
+  }
+  function move(dir) {
+    var moved = false, gain = 0, y, x, i, line, r;
+    for (var k = 0; k < N; k++) {
+      line = [];
+      for (i = 0; i < N; i++) {
+        if (dir === 'left') line.push(grid[k][i]); else if (dir === 'right') line.push(grid[k][N - 1 - i]);
+        else if (dir === 'up') line.push(grid[i][k]); else line.push(grid[N - 1 - i][k]);
+      }
+      r = slide(line); gain += r.gained;
+      for (i = 0; i < N; i++) {
+        var v = r.line[i], px, py;
+        if (dir === 'left') { px = i; py = k; } else if (dir === 'right') { px = N - 1 - i; py = k; } else if (dir === 'up') { px = k; py = i; } else { px = k; py = N - 1 - i; }
+        if (grid[py][px] !== v) { moved = true; grid[py][px] = v; }
+      }
+    }
+    if (!moved) return;
+    pop = {}; score += gain; if (gain) TV.beep(500 + Math.min(600, gain * 4), 0.06, 'square', 0.07); else TV.beep(300, 0.03, 'square', 0.04);
+    addTile();
+    if (score > best) { best = score; TV.store.set('g2048_best', best); }
+    for (y = 0; y < N; y++) for (x = 0; x < N; x++) if (grid[y][x] >= 2048 && !keepGoing) { won = true; state = 'won'; }
+    if (state === 'play' && !canMove()) state = 'over';
+  }
+  function canMove() {
+    for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+      if (!grid[y][x]) return true;
+      if (x < N - 1 && grid[y][x] === grid[y][x + 1]) return true;
+      if (y < N - 1 && grid[y][x] === grid[y + 1][x]) return true;
+    }
+    return false;
+  }
+
+  TV.on(function (type, key, rep) {
+    if (type !== 'down') return;
+    if (key === 'back') { TV.exit(); return; }
+    if (state === 'over') { if (key === 'ok' || key === 'start') newGame(); return; }
+    if (state === 'won') { if (key === 'ok') { keepGoing = true; state = 'play'; } else if (key === 'start') newGame(); return; }
+    if (key === 'left' || key === 'right' || key === 'up' || key === 'down') move(key);
+    else if (key === 'start') newGame();
+  });
+  newGame();
+
+  var t = 0;
+  var PITCH = 1.15;
+  function draw2() {
+    c.fillStyle = '#0f1a3d'; c.fillRect(0, 0, W, H);
+    TV.text('2048', 30, 32, 40, '#ffd21f', 'left');
+    TV.text('SCORE ' + score, W - 230, 32, 22, '#fff', 'right'); TV.text('BEST ' + best, W - 30, 32, 22, '#ffd21f', 'right');
+    var bw = N * SZ + (N + 1) * GAPX; c.fillStyle = '#18224a'; c.fillRect(OX, OY, bw, bw);
+    for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+      var v = grid[y][x], px = OX + GAPX + x * (SZ + GAPX), py = OY + GAPX + y * (SZ + GAPX);
+      c.fillStyle = COL[v] || '#3c3a32'; c.fillRect(px, py, SZ, SZ);
+      if (v) { c.font = 'bold ' + (v < 100 ? 48 : v < 1000 ? 40 : 32) + 'px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = v <= 4 ? '#6b5d4f' : '#fff'; c.fillText(String(v), px + SZ / 2, py + SZ / 2 + 2); }
+    }
+    if (state === 'over') TV.panel('NO MOVES LEFT', ['Score ' + score + '   Best ' + best, 'Press OK for a new game', 'Back: menu'], '#ff5a4e');
+    else if (state === 'won') TV.panel('YOU REACHED 2048!', ['OK: keep going', 'P: new game'], '#ffd21f');
+  }
+  var draw = TV.pick(draw2, draw3);
+  function draw3() {
+    var G = TV3D, x, y;
+    c.fillStyle = '#0b1030'; c.fillRect(0, 0, W, H);
+    G.camera([0, 7.4, 5.6], [0, 0, 0.35], 46); G.fog('#0b1030', 30, 70); G.light(0.58);
+    var hb = 2 * PITCH + 0.35;
+    G.quad([-hb, 0, hb], [hb, 0, hb], [hb, 0, -hb], [-hb, 0, -hb], '#1d2a63');
+    G.box(0, 0.12, -hb - 0.12, hb * 2 + 0.5, 0.3, 0.25, '#2c3b78'); G.box(0, 0.12, hb + 0.12, hb * 2 + 0.5, 0.3, 0.25, '#2c3b78');
+    G.box(-hb - 0.12, 0.12, 0, 0.25, 0.3, hb * 2, '#2c3b78'); G.box(hb + 0.12, 0.12, 0, 0.25, 0.3, hb * 2, '#2c3b78');
+    var labels = [];
+    for (y = 0; y < N; y++) for (x = 0; x < N; x++) {
+      var v = grid[y][x], wx = (x - 1.5) * PITCH, wz = (y - 1.5) * PITCH;
+      G.quad([wx - 0.5, 0.01, wz + 0.5], [wx + 0.5, 0.01, wz + 0.5], [wx + 0.5, 0.01, wz - 0.5], [wx - 0.5, 0.01, wz - 0.5], '#26346a');
+      if (v) {
+        var lg = Math.log(v) / Math.LN2, hh = 0.35 + lg * 0.13;
+        G.box(wx, hh / 2, wz, 1.0, hh, 1.0, COL[v] || '#3c3a32', v >= 128 ? 0.15 : 0);
+        labels.push([wx, hh + 0.01, wz, v]);
+      }
+    }
+    G.flush();
+    for (var i = 0; i < labels.length; i++) {
+      var p = G.project([labels[i][0], labels[i][1], labels[i][2] + 0.05]); if (!p) continue;
+      var v2 = labels[i][3], size = G.scale(p[2]) * (v2 < 100 ? 0.5 : v2 < 1000 ? 0.42 : 0.34);
+      c.font = 'bold ' + Math.round(size) + 'px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = v2 <= 4 ? '#6b5d4f' : '#fff'; c.fillText(String(v2), p[0], p[1]);
+    }
+    TV.text('2048 3D', 30, 32, 36, '#ffd21f', 'left');
+    TV.text('SCORE ' + score, W - 230, 32, 22, '#fff', 'right'); TV.text('BEST ' + best, W - 30, 32, 22, '#ffd21f', 'right');
+    if (state === 'over') TV.panel('NO MOVES LEFT', ['Score ' + score + '   Best ' + best, 'Press OK for a new game', 'Back: menu'], '#ff5a4e');
+    else if (state === 'won') TV.panel('YOU REACHED 2048!', ['OK: keep going', 'P: new game'], '#ffd21f');
+  }
+  TV.loop(function (dt) { t += dt; }, draw);
+})();
+</script>
+
+</body></html>

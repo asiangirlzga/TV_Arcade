@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phone controller</title>
+<style>
+  html,body{margin:0;min-height:100%;background:#0b1030;color:#f3efe4;font-family:Arial,Helvetica,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:4vh 4vw}
+  h1{font-size:40px;margin:0 0 8px}
+  p{font-size:20px;line-height:1.4;color:#cfd6ff;margin:8px 0}
+  .box{background:#18224a;border-radius:16px;padding:18px 22px;margin:18px 0}
+  #st{font-size:30px;font-weight:bold;margin:6px 0}
+  .on{color:#6fe39a}.off{color:#ffd21f}
+  label{display:block;font-size:18px;color:#aeb7da;margin:12px 0 6px}
+  input{width:100%;box-sizing:border-box;font-size:26px;padding:10px 12px;border-radius:10px;border:3px solid #2b3870;background:#0d1438;color:#fff}
+  button,a.btn{display:inline-block;font-size:22px;font-weight:bold;padding:12px 20px;margin:12px 12px 0 0;border-radius:10px;border:3px solid transparent;background:#ffd21f;color:#1a1a2e;text-decoration:none;cursor:pointer}
+  button.g,a.g{background:#26346a;color:#fff}
+  input:focus,button:focus,a:focus{outline:none;border-color:#fff;box-shadow:0 0 0 3px #5b6cff}
+  ol{font-size:20px;line-height:1.5;color:#cfd6ff;padding-left:26px}
+</style></head><body><div class="wrap">
+  <h1>Phone controller</h1>
+  <p>Use the TV Pad phone app as a game pad.</p>
+  <div class="box">
+    <div id="st" class="off">Looking for the phone...</div>
+    <p id="detail"></p>
+    <ol>
+      <li>Turn on the phone's hotspot and join it from the TV (or put both on the same Wi-Fi).</li>
+      <li>Open the TV Pad app on the phone.</li>
+      <li>This screen connects by itself. If you are on a router, type the phone's IP address below.</li>
+    </ol>
+    <label for="ip">Phone IP address (leave empty for automatic)</label>
+    <input id="ip" type="text" inputmode="decimal" placeholder="192.168.43.1" autocomplete="off">
+    <button id="save">Connect</button><button id="auto" class="g">Automatic</button>
+  </div>
+  <div class="box">
+    <div id="sst" style="font-size:22px;margin-bottom:6px"></div>
+    <p>Games uploaded at your site are downloaded here, so they also play without internet.</p>
+    <button id="sync">Update games now</button>
+    <label for="url">Online arcade address (optional, your site berry.gt.tc by default, for games you uploaded in admin.php)</label>
+    <input id="url" type="text" placeholder="https://berry.gt.tc/" autocomplete="off">
+    <button id="open" class="g">Open online arcade</button><button id="saveurl" class="g">Save address</button>
+  </div>
+  <a class="btn g" id="back" href="index.html">Back to games</a>
+</div>
+<script>
+(function () {
+  var A = window.Android, st = document.getElementById('st'), dt = document.getElementById('detail'), ip = document.getElementById('ip'), url = document.getElementById('url');
+  function poll() {
+    if (!A) { st.className = 'off'; st.textContent = 'Open this page inside the TV Arcade app'; return; }
+    document.getElementById('sst').textContent = A.syncStatus();
+    var s = A.padStatus(), ok = s.indexOf('Connected') === 0;
+    st.className = ok ? 'on' : 'off'; st.textContent = ok ? 'Connected' : 'Looking for the phone...'; dt.textContent = s;
+  }
+  if (A) { ip.value = A.padHost(); url.value = A.getOnlineUrl(); }
+  document.getElementById('save').onclick = function () { if (A) A.padConnect(ip.value.replace(/\s+/g, '')); poll(); };
+  document.getElementById('auto').onclick = function () { ip.value = ''; if (A) A.padConnect(''); poll(); };
+  document.getElementById('saveurl').onclick = function () { if (A) A.setOnlineUrl(url.value.replace(/\s+/g, '')); };
+  document.getElementById('open').onclick = function () { if (A) { A.setOnlineUrl(url.value.replace(/\s+/g, '')); A.openOnline(); } };
+  window.addEventListener('keydown', function (e) { if (e.key === 'Escape' || e.keyCode === 4 || e.keyCode === 27) { window.location.href = 'index.html'; } }, false);
+  document.getElementById('sync').onclick = function () { if (A) A.syncNow(); poll(); };
+  poll(); setInterval(poll, 1000);
+  document.getElementById('save').focus();
+})();
+</script></body></html>

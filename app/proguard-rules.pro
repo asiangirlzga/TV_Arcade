@@ -1,0 +1,2 @@
+-keepclassmembers class tv.arcade.MainActivity$Bridge { public *; }
+-keepattributes JavascriptInterface

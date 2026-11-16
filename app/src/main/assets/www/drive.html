@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Driving School</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "UP = gas, DOWN = brake, LEFT\/RIGHT steer, OK = gear, 1\/3 indicators, 2 hazard, 4 horn, Back = pause.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var ctx = TV.ctx, w = TV.W, h = TV.H;
+
+  /* ---------------- constants (same numbers as the Android game) ---------------- */
+  var SEG = 200, T = 1800, NC = 40, MAXD = 110, NMIN = 3, CARL = 900, NOSE = 900;
+  var TLEN = SEG * T, RW = 2000, CAMH = 1000, DEPTH = 0.84, CAMBACK = 840, KU = 60, MAXK = 120, MPS = 3;
+  var S_MENU = 0, S_PLAY = 1, S_PAUSE = 2, S_RESULT = 3;
+  var G_P = 0, G_R = 1, G_N = 2, G_D = 3;
+  var NEXT_GEAR = [G_D, G_N, G_P, G_R];
+  var GEARS = ['P', 'R', 'N', 'D'];
+  var LIM = [40, 60, 50, 30, 60, 40];
+  var LANEX = [-0.667, 0, 0.667];
+  var LANEK = [25, 40, 55];
+  var PAL = [0x8B7765, 0x6D7A86, 0xA08F7E, 0x566372, 0xB3A38F, 0x7C6A62];
+  var CARC = [0xC0392B, 0x2E86C1, 0xF4F4F4, 0xF1C40F, 0x27AE60, 0x7D3C98, 0x95A5A6];
+  var SIGS = [250, 550, 850, 1150, 1450, 1750];
+  var PUMPS = [780, 1560];
+  var SPD_LBL = ['0', '40', '80', '120', '160'];
+
+  /* ---------------- helpers: 32-bit multiply, seeded LCG, colours ---------------- */
+  function mul(a, b) {
+    var ah = (a >>> 16) & 0xffff, al = a & 0xffff, bh = (b >>> 16) & 0xffff, bl = b & 0xffff;
+    return ((al * bl) + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
+  }
+  function Rng(seed) { this.s = (seed * 2654435761) >>> 0; }
+  Rng.prototype.next = function () { this.s = (mul(this.s, 1664525) + 1013904223) >>> 0; this.s = (mul(this.s, 1664525) + 1013904223) >>> 0; return this.s / 4294967296; };
+  Rng.prototype.int = function (n) { return Math.floor(this.next() * n); };
+  Rng.prototype.bool = function () { return this.next() < 0.5; };
+
+  function hash(n) {
+    n = (n ^ 61) ^ (n >>> 16);
+    n = (n + (n << 3)) | 0;
+    n ^= n >>> 4;
+    n = mul(n, 0x27d4eb2d);
+    n ^= n >>> 15;
+    return n | 0;
+  }
+  var colCache = {};
+  function C(c) {
+    var s = colCache[c];
+    if (!s) { s = 'rgb(' + ((c >> 16) & 255) + ',' + ((c >> 8) & 255) + ',' + (c & 255) + ')'; colCache[c] = s; }
+    return s;
+  }
+  function shade(c, f) {
+    return (Math.floor(((c >> 16) & 255) * f) << 16) | (Math.floor(((c >> 8) & 255) * f) << 8) | Math.floor((c & 255) * f);
+  }
+
+  /* ---------------- track ---------------- */
+  var CURVE = [], FEAT = [], i0, k0;
+  for (i0 = 0; i0 < T; i0++) { CURVE.push(0); FEAT.push(0); }
+  (function () {
+    var r = new Rng(11), i = 120, k, len, mag;
+    while (i < T - 200) {
+      i += 60 + r.int(100);
+      len = 80 + r.int(100);
+      mag = (1.3 + r.next() * 2.2) * (r.bool() ? 1 : -1);
+      for (k = 0; k < len && i < T - 120; k++, i++) CURVE[i] = mag * Math.sin(Math.PI * k / len);
+    }
+    for (k = 0; k < SIGS.length; k++) FEAT[SIGS[k]] = k + 1;
+    for (k = 0; k < PUMPS.length; k++) { FEAT[PUMPS[k]] = 10; FEAT[PUMPS[k] + 4] = 10; FEAT[PUMPS[k] + 8] = 10; }
+  })();
+
+  /* ---------------- state ---------------- */
+  var state = S_MENU, sel = 0, test = true, low = TV.store.get('drive_low', true) !== false;
+  var snd = TV.store.get('drive_snd', true) !== false, best = TV.store.get('drive_best', 0);
+  TV.setMuted(!snd);
+  var pos = 0, speed = 25, playerX = 0, steer = 0, fuel = 1, score = 100, time = 0, clock = 0, traveled = 0;
+  var gear = G_D, gas = false, brk = false, left = false, right = false, blinkL = false, blinkR = false, haz = false;
+  var blinkT = 0, overT = 0, offT = 0, crashCd = 0, msgT = 0, lastLane = 1, lastZone = -1;
+  var msg = '', hint = '', msgBad = false, resTitle = '', resPass = false, newBest = false;
+  var nc = 0, cz = [], cs = [], ct = [], cl = [], cc = [], cn = [], nextC = [], cb = [];
+  var X = [], W = [], Y = [], SC = [], head = [], i1;
+  for (i1 = 0; i1 < MAXD + 2; i1++) { X.push(0); W.push(0); Y.push(0); SC.push(0); head.push(-1); }
+  for (i1 = 0; i1 < NC; i1++) { cz.push(0); cs.push(0); ct.push(0); cl.push(0); cc.push(0); cn.push(0); nextC.push(-1); cb.push(false); }
+  var vs = h * 0.5, hor = h * 0.42;
+  var rpm = 0.7, lastBlink = -1, audioOn = false;
+
+  var skyG = ctx.createLinearGradient(0, 0, 0, hor);
+  skyG.addColorStop(0, '#4F86C6'); skyG.addColorStop(1, '#DCE6EE');
+  var hazeG = ctx.createLinearGradient(0, hor, 0, hor + h * 0.14);
+  hazeG.addColorStop(0, 'rgba(220,230,238,0.9)'); hazeG.addColorStop(1, 'rgba(220,230,238,0)');
+
+  /* ---------------- sound ---------------- */
+  var eng = null;
+  function engine(on, rate, vol) {
+    try {
+      if (!on || !audioOn || TV.isMuted()) {
+        if (eng) { try { eng.o.stop(0); } catch (e1) { /* ignore */ } try { eng.o.disconnect(); eng.f.disconnect(); eng.g.disconnect(); } catch (e2) { /* ignore */ } eng = null; }
+        return;
+      }
+      if (!eng) {
+        var ac = TV.ac(); if (!ac) return;
+        if (ac.state === 'suspended' && ac.resume) ac.resume();
+        var o = ac.createOscillator(), f = ac.createBiquadFilter(), g = ac.createGain();
+        o.type = 'sawtooth'; f.type = 'lowpass'; f.frequency.value = 420; g.gain.value = 0;
+        o.connect(f); f.connect(g); g.connect(ac.destination); o.start(0);
+        eng = { o: o, f: f, g: g };
+      }
+      eng.o.frequency.value = 55 * rate;
+      eng.g.gain.value = vol * 0.22;
+    } catch (e) { /* silent */ }
+  }
+  function later(fn, ms) { setTimeout(function () { try { fn(); } catch (e) { /* ignore */ } }, ms); }
+  var TICK = 0, TOCK = 1, CRASH = 2, BEEP = 3, GEAR = 4, HORN = 5, WIN = 6, FAIL = 7, CLICK = 8;
+  function sfx(id) {
+    if (!audioOn || TV.isMuted()) return;
+    switch (id) {
+      case TICK: TV.beep(2400, 0.03, 'square', 0.03); break;
+      case TOCK: TV.beep(1700, 0.03, 'square', 0.03); break;
+      case CLICK: TV.beep(1300, 0.03, 'square', 0.04); break;
+      case GEAR: TV.beep(95, 0.14, 'triangle', 0.2); break;
+      case CRASH: TV.beep(160, 0.5, 'sawtooth', 0.2, 40); TV.beep(900, 0.2, 'square', 0.05, 100); break;
+      case BEEP: TV.beep(700, 0.14, 'square', 0.07); later(function () { TV.beep(450, 0.22, 'square', 0.07); }, 170); break;
+      case HORN: TV.beep(420, 0.5, 'sawtooth', 0.07); TV.beep(530, 0.5, 'sawtooth', 0.07); break;
+      case WIN: TV.beep(523, 0.2, 'triangle', 0.15); later(function () { TV.beep(659, 0.2, 'triangle', 0.15); }, 140); later(function () { TV.beep(784, 0.2, 'triangle', 0.15); }, 280); later(function () { TV.beep(1047, 0.4, 'triangle', 0.15); }, 420); break;
+      default: TV.beep(392, 0.3, 'triangle', 0.15); later(function () { TV.beep(330, 0.3, 'triangle', 0.15); }, 200); later(function () { TV.beep(262, 0.45, 'triangle', 0.15); }, 400); break;
+    }
+  }
+  function audio(dt) {
+    if (state !== S_PLAY || fuel <= 0) { engine(false, 1, 0); rpm = 0.7; lastBlink = -1; return; }
+    var sp = Math.min(1, Math.abs(speed) / MAXK);
+    var target = 0.7 + 2.2 * sp;
+    if (gas) target = (gear === G_P || gear === G_N) ? 2.3 : target + 0.25;
+    rpm += (target - rpm) * Math.min(1, dt * 4);
+    engine(true, rpm, 0.22 + (gas ? 0.28 : 0) + 0.2 * sp);
+    if (blinkL || blinkR || haz) {
+      var ph = Math.floor(clock * 2.5) & 1;
+      if (ph !== lastBlink) { lastBlink = ph; sfx(ph === 0 ? TICK : TOCK); }
+    } else lastBlink = -1;
+  }
+
+  /* ---------------- game flow ---------------- */
+  function clearInput() { gas = brk = left = right = false; }
+  function pauseGame() { if (state === S_PLAY) { state = S_PAUSE; sel = 0; clearInput(); engine(false, 1, 0); } }
+  function resume() { state = S_PLAY; }
+  function backToMenu() {
+    state = S_MENU; sel = 0; speed = 25; playerX = 0; gear = G_D; steer = 0; clearInput();
+    blinkL = blinkR = haz = false; engine(false, 1, 0);
+  }
+  function startGame(t) {
+    test = t; state = S_PLAY; pos = 0; speed = 0; playerX = 0; steer = 0; gear = G_P; fuel = 1; score = 100;
+    time = 0; traveled = 0; msg = ''; msgT = 0; hint = ''; blinkL = blinkR = haz = false;
+    overT = offT = crashCd = blinkT = 0; lastLane = 1; lastZone = -1; newBest = false;
+    clearInput(); spawnTraffic();
+  }
+  function finish(title, pass) {
+    state = S_RESULT; sel = 0; resTitle = title; resPass = pass; newBest = false;
+    if (test && score > best) { best = Math.floor(score); newBest = true; TV.store.set('drive_best', best); }
+    sfx(pass ? WIN : FAIL); clearInput(); engine(false, 1, 0);
+  }
+  function tip(m, bad, secs) { msg = m; msgBad = bad; msgT = secs; }
+  function pen(m, pts, crash) {
+    sfx(crash ? CRASH : BEEP);
+    score -= pts; tip(m, true, 2.6);
+    if (test && score <= 0) { score = 0; finish('TEST FAILED', false); }
+  }
+  function shiftGear() {
+    if (Math.abs(speed) > 2) { tip('Stop the car before changing gear', true, 2); return; }
+    gear = NEXT_GEAR[gear]; sfx(GEAR);
+  }
+  function items() {
+    if (state === S_MENU) return ['Driving Test  (1 lap)', 'Free Drive', low ? 'Graphics: LITE  (smooth on old TVs)' : 'Graphics: BETTER', TV.isMuted() ? 'Sound: OFF' : 'Sound: ON', 'Exit'];
+    if (state === S_PAUSE) return ['Resume', 'Restart', 'Main Menu'];
+    return ['Play Again', 'Main Menu'];
+  }
+  function activate() {
+    if (state === S_MENU) {
+      if (sel === 0) startGame(true);
+      else if (sel === 1) startGame(false);
+      else if (sel === 2) { low = !low; TV.store.set('drive_low', low); }
+      else if (sel === 3) { var m = !TV.isMuted(); TV.setMuted(m); TV.store.set('drive_snd', !m); if (m) engine(false, 1, 0); }
+      else TV.exit();
+    } else if (state === S_PAUSE) {
+      if (sel === 0) resume(); else if (sel === 1) startGame(test); else backToMenu();
+    } else if (state === S_RESULT) {
+      if (sel === 0) startGame(test); else backToMenu();
+    }
+  }
+
+  TV.on(function (type, key, rep) {
+    var down = type === 'down';
+    if (down && !audioOn) { audioOn = true; try { var a = TV.ac(); if (a && a.state === 'suspended' && a.resume) a.resume(); } catch (e) { /* ignore */ } }
+    if (state === S_PLAY) {
+      switch (key) {
+        case 'up': gas = down; break;
+        case 'down': brk = down; break;
+        case 'left': left = down; break;
+        case 'right': right = down; break;
+        case 'ok': if (down && !rep) shiftGear(); break;
+        case 'k1': if (down && !rep) { blinkL = !blinkL; blinkR = false; haz = false; } break;
+        case 'k3': if (down && !rep) { blinkR = !blinkR; blinkL = false; haz = false; } break;
+        case 'k2': if (down && !rep) { haz = !haz; blinkL = blinkR = false; } break;
+        case 'k4': if (down && !rep) sfx(HORN); break;
+        case 'back': case 'start': if (down && !rep) pauseGame(); break;
+      }
+      return;
+    }
+    if (!down) return;
+    if (key === 'back' || key === 'start') {
+      if (rep) return;
+      if (state === S_PAUSE) resume();
+      else if (state === S_RESULT) backToMenu();
+      else if (key === 'back') TV.exit();
+      return;
+    }
+    var it = items();
+    if (key === 'up' || key === 'left') { sel = (sel + it.length - 1) % it.length; sfx(CLICK); }
+    else if (key === 'down' || key === 'right') { sel = (sel + 1) % it.length; sfx(CLICK); }
+    else if (key === 'ok' && !rep) { sfx(CLICK); activate(); }
+  });
+
+  /* ---------------- traffic ---------------- */
+  function spawnTraffic() {
+    var r = new Rng(5), placed = 0, tries = 0, z, lane, d, ok, j, dz;
+    while (placed < NC && tries < 3000) {
+      tries++;
+      z = r.next() * TLEN; lane = r.int(3);
+      d = z > TLEN / 2 ? z - TLEN : z;
+      if (Math.abs(d) < 9000) continue;
+      ok = true;
+      for (j = 0; j < placed; j++) {
+        if (cl[j] !== lane) continue;
+        dz = Math.abs(cz[j] - z); dz = Math.min(dz, TLEN - dz);
+        if (dz < 4500) { ok = false; break; }
+      }
+      if (!ok) continue;
+      cz[placed] = z; cl[placed] = lane; cs[placed] = LANEK[lane]; cc[placed] = CARC[r.int(CARC.length)]; cb[placed] = false;
+      placed++;
+    }
+    nc = placed;
+  }
+  function phase(k) {
+    var t = (clock + k * 5) % 16;
+    return t < 8 ? 0 : (t < 10 ? 1 : 2);
+  }
+  function wrapPos() { while (pos < 0) pos += TLEN; while (pos >= TLEN) pos -= TLEN; }
+  function updateTraffic(dt) {
+    var i, j, k, target, front, d, g, sa, dz, gap;
+    for (i = 0; i < nc; i++) {
+      target = LANEK[cl[i]]; front = cz[i] + CARL;
+      for (k = 0; k < SIGS.length; k++) {
+        if (phase(k) !== 2) continue;
+        d = SIGS[k] * SEG - front;
+        if (d < -TLEN / 2) d += TLEN;
+        if (d > TLEN / 2) d -= TLEN;
+        if (d > -150 && d < 4500) target = Math.min(target, Math.max(0, d - 300) * 0.015);
+      }
+      g = 1e9; sa = 0;
+      for (j = 0; j < nc; j++) {
+        if (j === i || cl[j] !== cl[i]) continue;
+        dz = cz[j] - cz[i]; if (dz < 0) dz += TLEN;
+        gap = dz - CARL;
+        if (gap < g) { g = gap; sa = cs[j]; }
+      }
+      if (Math.abs(LANEX[cl[i]] - playerX) < 0.4) {
+        dz = (pos + NOSE - 1500) - cz[i];
+        if (dz < -TLEN / 2) dz += TLEN;
+        if (dz > TLEN / 2) dz -= TLEN;
+        gap = dz - CARL;
+        if (gap > -1200 && gap < g) { g = gap; sa = Math.max(0, speed); }
+      }
+      if (g < 3000) {
+        target = Math.min(target, sa + Math.max(0, g - 800) * 0.012);
+        if (g < 400) target = 0;
+      }
+      cb[i] = cs[i] > target + 1;
+      if (cs[i] < target) cs[i] = Math.min(target, cs[i] + 12 * dt);
+      else cs[i] = Math.max(target, cs[i] - 45 * dt);
+      cz[i] += cs[i] * KU * dt;
+      if (cz[i] >= TLEN) cz[i] -= TLEN;
+    }
+  }
+
+  /* ---------------- update ---------------- */
+  function update(dt) {
+    if (dt < 0.001) dt = 0.001;
+    audio(dt);
+    if (state === S_PAUSE || state === S_RESULT) return;
+    clock += dt;
+    if (state === S_MENU) { pos += 25 * KU * dt; wrapPos(); updateTraffic(dt); return; }
+    var i, k;
+    time += dt;
+    if (msgT > 0) msgT -= dt;
+    if (crashCd > 0) crashCd -= dt;
+    var engineOn = fuel > 0;
+    var st = (left ? -1 : 0) + (right ? 1 : 0);
+    steer += (st - steer) * Math.min(1, dt * 5);
+
+    if (gear === G_D) { if (gas && engineOn) speed += 14 * (1 - Math.max(0, speed) / 125) * dt; }
+    else if (gear === G_R) { if (gas && engineOn) speed -= 6 * dt; if (speed < -15) speed = -15; }
+    var driving = gas && engineOn && (gear === G_D || gear === G_R);
+    if (!driving) {
+      var drag = 1.2 + Math.abs(speed) * 0.025;
+      if (gear === G_P) drag += 25;
+      if (speed > 0) speed = Math.max(0, speed - drag * dt);
+      else if (speed < 0) speed = Math.min(0, speed + drag * dt);
+    }
+    if (brk) {
+      var b = 38 * dt;
+      if (speed > 0) speed = Math.max(0, speed - b); else speed = Math.min(0, speed + b);
+    }
+    if (speed > MAXK) speed = MAXK;
+
+    if (engineOn) fuel -= dt * (0.0010 + 0.0018 * Math.abs(speed) / MAXK);
+    if (fuel < 0) fuel = 0;
+    if (!engineOn && Math.abs(speed) < 1) { finish('OUT OF FUEL', false); return; }
+
+    var prevFront = pos + NOSE, moved = speed * KU * dt;
+    pos += moved;
+    if (moved > 0) traveled += moved;
+    wrapPos();
+    var ps = Math.min(T - 1, Math.floor(pos / SEG));
+    var sp = Math.abs(speed) / MAXK;
+    playerX += dt * 2 * sp * steer;
+    playerX -= dt * 2 * sp * sp * CURVE[ps] * 0.28;
+
+    var ax = Math.abs(playerX);
+    if (ax > 1.02) {
+      offT += dt;
+      if (speed > 20) speed = Math.max(20, speed - 40 * dt);
+      if (offT > 2.5) { offT = 0; pen('Stay on the road', 3); }
+    } else offT = 0;
+    if (ax > 1.35) {
+      playerX = (playerX < 0 ? -1 : 1) * 1.3;
+      if (crashCd <= 0) { crashCd = 1.5; speed *= 0.3; pen('You hit the wall!', 10, true); }
+    }
+    if (state !== S_PLAY) return;
+
+    var zone = Math.min(LIM.length - 1, Math.floor(ps / 300)), lim = LIM[zone];
+    if (zone !== lastZone) { lastZone = zone; tip('Speed limit ' + lim + ' km/h', false, 2.5); }
+    if (speed > lim + 4) {
+      overT += dt;
+      if (overT > 2.5) { overT = 0; pen('Over the speed limit (' + lim + ')', 3); }
+    } else overT = 0;
+    if (state !== S_PLAY) return;
+
+    var ln = Math.floor((playerX + 1) * 1.5);
+    if (ln < 0) ln = 0; if (ln > 2) ln = 2;
+    if (ln !== lastLane) {
+      if (ax < 1 && Math.abs(speed) > 5) {
+        var ok = (ln > lastLane && blinkR) || (ln < lastLane && blinkL) || haz;
+        if (ok) { blinkL = blinkR = false; } else pen('Use your indicator when changing lanes', 2);
+      }
+      lastLane = ln;
+    }
+    if (blinkL || blinkR || haz) {
+      blinkT += dt;
+      if (blinkT > 9 && !haz) { blinkL = blinkR = false; blinkT = 0; }
+    } else blinkT = 0;
+    if (state !== S_PLAY) return;
+
+    for (k = 0; k < SIGS.length; k++) {
+      var line = SIGS[k] * SEG, dprev = (line - prevFront) % TLEN;
+      if (dprev < 0) dprev += TLEN;
+      if (moved > 0 && dprev > 0 && dprev <= moved && phase(k) === 2) { pen('Red light jumped!', 15); break; }
+    }
+    if (state !== S_PLAY) return;
+
+    for (i = 0; i < nc; i++) {
+      var rel = cz[i] - pos;
+      if (rel > TLEN / 2) rel -= TLEN; else if (rel < -TLEN / 2) rel += TLEN;
+      if (rel < NOSE && rel > NOSE - 1500 && crashCd <= 0 && Math.abs(LANEX[cl[i]] - playerX) < 0.36) {
+        crashCd = 1.5;
+        if (rel > NOSE - 500) { pos = cz[i] - NOSE - 200; wrapPos(); }
+        else playerX += (playerX >= LANEX[cl[i]] ? 1 : -1) * 0.15;
+        speed *= 0.2;
+        pen('Crash! Keep a safe distance', 10, true);
+        break;
+      }
+    }
+    if (state !== S_PLAY) return;
+
+    var nearPump = false;
+    for (i = 0; i < PUMPS.length; i++) if (Math.abs(ps - (PUMPS[i] + 4)) <= 20) nearPump = true;
+    if (nearPump && Math.abs(speed) < 8 && (gear === G_P || gear === G_N) && fuel < 1) {
+      fuel = Math.min(1, fuel + 0.25 * dt); hint = 'Refuelling...';
+    } else {
+      hint = '';
+      if (gear === G_P) hint = 'Press OK to shift into Drive (D)';
+      else if (gear === G_D && Math.abs(speed) < 1 && time < 25) hint = 'Hold UP = accelerate     DOWN = brake     LEFT / RIGHT = steer';
+      if (nearPump && fuel < 0.9) hint = 'Petrol pump: stop, press OK until P, wait to refuel';
+      else if (fuel < 0.2) hint = 'Low fuel! Look for the petrol pump on the right';
+      for (k = 0; k < SIGS.length; k++) {
+        var d = SIGS[k] * SEG - (pos + NOSE);
+        if (d < 0) d += TLEN;
+        if (d > 0 && d < 9000 && phase(k) === 2) { hint = 'RED LIGHT - stop before the white line'; break; }
+      }
+    }
+    if (test && traveled >= TLEN) { var pass = score >= 70; finish(pass ? 'TEST PASSED' : 'TEST FAILED', pass); }
+  }
+
+  /* ---------------- drawing helpers ---------------- */
+  function fill(c) { ctx.fillStyle = typeof c === 'number' ? C(c) : c; }
+  function rect(l, t, r, b) { ctx.fillRect(l, t, r - l, b - t); }
+  function quad(ax, ay, bx, by, cx, cy, dx, dy) {
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.lineTo(dx, dy); ctx.closePath(); ctx.fill();
+  }
+  function strip(n, off, half, color) {
+    var xa1 = X[n] + W[n] * (off - half), xb1 = X[n] + W[n] * (off + half);
+    var xa2 = X[n + 1] + W[n + 1] * (off - half), xb2 = X[n + 1] + W[n + 1] * (off + half);
+    fill(color); quad(xa1, Y[n], xb1, Y[n], xb2, Y[n + 1], xa2, Y[n + 1]);
+  }
+  function wall(n, side, yb0, yb1, color) {
+    var k = side * 1.5, xa = X[n] + W[n] * k, xb = X[n + 1] + W[n + 1] * k;
+    var ya0 = Y[n] - SC[n] * yb0 * vs, ya1 = Y[n] - SC[n] * yb1 * vs;
+    var yc0 = Y[n + 1] - SC[n + 1] * yb0 * vs, yc1 = Y[n + 1] - SC[n + 1] * yb1 * vs;
+    fill(color); quad(xa, ya0, xa, ya1, xb, yc1, xb, yc0);
+  }
+  function circle(x, y, r, color) { fill(color); ctx.beginPath(); ctx.arc(x, y, Math.max(0.1, r), 0, 6.283185); ctx.fill(); }
+  function ring(x, y, r, color, wd) { ctx.strokeStyle = typeof color === 'number' ? C(color) : color; ctx.lineWidth = wd; ctx.beginPath(); ctx.arc(x, y, Math.max(0.1, r), 0, 6.283185); ctx.stroke(); }
+  function line(x1, y1, x2, y2, color, wd) { ctx.strokeStyle = typeof color === 'number' ? C(color) : color; ctx.lineWidth = wd; ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+  function tri(x1, y1, x2, y2, x3, y3, color) { fill(color); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath(); ctx.fill(); }
+  function pill(l, t, r, b, color) {
+    var rad = (b - t) * 0.3;
+    fill(color); ctx.beginPath();
+    ctx.moveTo(l + rad, t); ctx.lineTo(r - rad, t); ctx.quadraticCurveTo(r, t, r, t + rad); ctx.lineTo(r, b - rad);
+    ctx.quadraticCurveTo(r, b, r - rad, b); ctx.lineTo(l + rad, b); ctx.quadraticCurveTo(l, b, l, b - rad);
+    ctx.lineTo(l, t + rad); ctx.quadraticCurveTo(l, t, l + rad, t); ctx.closePath(); ctx.fill();
+  }
+  function txt(s, x, y, size, color, align, bold) {
+    ctx.font = (bold ? 'bold ' : '') + Math.round(size) + 'px Arial, Helvetica, sans-serif';
+    ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(0,0,0,0.67)'; ctx.fillText(s, x + size * 0.05, y + size * 0.05);
+    fill(color); ctx.fillText(s, x, y);
+  }
+  function fmt(t) {
+    var ms = Math.floor(t * 100), m = Math.floor(ms / 6000), s = Math.floor(ms / 100) % 60, c = ms % 100;
+    return m + ':' + (s < 10 ? '0' : '') + s + '.' + (c < 10 ? '0' : '') + c;
+  }
+
+  /* ---------------- scene ---------------- */
+  function drawScene() {
+    var hw = w * 0.5, n, i, s;
+    ctx.fillStyle = skyG; rect(0, 0, w, hor + 1);
+    fill(0x6E6A63); rect(0, hor, w, h);
+    var draw = low ? 64 : 100;
+    var camZ = pos - CAMBACK;
+    if (camZ < 0) camZ += TLEN;
+    var base = Math.floor(camZ / SEG);
+    if (base >= T) base = T - 1;
+    var frac = camZ - base * SEG, camX = playerX * RW, x = 0, dx = -(frac / SEG) * CURVE[base];
+    for (n = 0; n <= draw; n++) {
+      var idx = (base + n) % T, zc = n * SEG - frac;
+      if (zc < 150) SC[n] = -1;
+      else {
+        var sc = DEPTH / zc;
+        SC[n] = sc; X[n] = hw + sc * (x - camX) * hw; W[n] = sc * RW * hw; Y[n] = hor + sc * CAMH * vs;
+      }
+      x += dx; dx += CURVE[idx];
+    }
+    for (n = 0; n <= draw; n++) head[n] = -1;
+    for (i = 0; i < nc; i++) {
+      var rel = cz[i] - camZ;
+      if (rel < 0) rel += TLEN;
+      var q = rel + frac, nn = Math.floor(q / SEG);
+      if (nn >= NMIN && nn < draw) { cn[i] = nn; ct[i] = (q - nn * SEG) / SEG; nextC[i] = head[nn]; head[nn] = i; }
+    }
+    for (n = draw - 1; n >= NMIN; n--) {
+      if (SC[n] <= 0 || SC[n + 1] <= 0) continue;
+      if (Y[n + 1] >= h) continue;
+      var id = (base + n) % T;
+      fill(((id >> 2) & 1) === 0 ? 0x77736B : 0x6E6A63);
+      rect(0, Y[n + 1], w, Y[n]);
+      strip(n, 0, 1, ((id >> 3) & 1) === 0 ? 0x34343A : 0x37373D);
+      strip(n, -0.97, 0.025, 0xE5C21A);
+      strip(n, 0.97, 0.025, 0xF2F2F2);
+      if ((id & 3) < 2) { strip(n, -0.333, 0.012, 0xDDDDDD); strip(n, 0.333, 0.012, 0xDDDDDD); }
+      var f = FEAT[id];
+      if (f >= 1 && f <= 6) {
+        var t = 0.3, xm = X[n] + (X[n + 1] - X[n]) * t, wm = W[n] + (W[n + 1] - W[n]) * t, ym = Y[n] + (Y[n + 1] - Y[n]) * t;
+        fill(0xF2F2F2);
+        quad(X[n] - W[n], Y[n], X[n] + W[n], Y[n], xm + wm, ym, xm - wm, ym);
+      }
+      var blk = Math.floor(id / 16);
+      for (s = 0; s < 2; s++) {
+        var side = s === 0 ? -1 : 1, hs = hash(blk * 2 + s);
+        if (((hs >>> 9) % 7) === 0) continue;
+        var bh = 3000 + (hs & 0xFFF) * 1.3, col = PAL[((hs >>> 12) & 0xFF) % 6];
+        if (side < 0) col = shade(col, 0.82);
+        wall(n, side, 0, bh, col);
+        if (!low && n < 50 && (id % 3) === 1) {
+          var wc = shade(col, 0.42);
+          for (var yb = 130; yb + 190 < bh - 100; yb += 380) wall(n, side, yb, yb + 190, wc);
+        }
+      }
+      if (f >= 1 && f <= 6) {
+        var ph = phase(f - 1);
+        for (s = 0; s < 2; s++) {
+          var xp = X[n] + W[n] * 1.18 * (s === 0 ? -1 : 1), ytop = Y[n] - SC[n] * 2600 * vs, pw = Math.max(1.5, W[n] * 0.012);
+          fill(0x333333); rect(xp - pw, ytop, xp + pw, Y[n]);
+          var bw = W[n] * 0.05, bhh = SC[n] * 1000 * vs;
+          fill(0x1A1A1A); rect(xp - bw, ytop - bhh, xp + bw, ytop);
+          var rr = Math.min(bw * 0.75, bhh * 0.14);
+          circle(xp, ytop - bhh * 0.8, rr, ph === 2 ? 0xFF2A2A : 0x3A1010);
+          circle(xp, ytop - bhh * 0.5, rr, ph === 1 ? 0xFFC400 : 0x3A3010);
+          circle(xp, ytop - bhh * 0.2, rr, ph === 0 ? 0x2CFF5A : 0x103A18);
+        }
+      } else if (f === 10) {
+        var xq = X[n] + W[n] * 1.2, bq = W[n] * 0.05, yt = Y[n] - SC[n] * 1500 * vs;
+        fill(0xE53935); rect(xq - bq, yt, xq + bq, Y[n]);
+        fill(0xFFFFFF); rect(xq - bq, yt, xq + bq, yt + (Y[n] - yt) * 0.25);
+      }
+      for (i = head[n]; i >= 0; i = nextC[i]) {
+        var tt = ct[i], xx = X[n] + (X[n + 1] - X[n]) * tt, ww = W[n] + (W[n + 1] - W[n]) * tt, yy = Y[n] + (Y[n + 1] - Y[n]) * tt;
+        drawCar(xx + ww * LANEX[cl[i]], yy, ww * 0.45, cc[i], cb[i]);
+      }
+    }
+    ctx.fillStyle = hazeG; rect(0, hor - 2, w, hor + h * 0.14);
+  }
+  function drawCar(sx, sy, bw, col, braking) {
+    if (bw < 1.5) return;
+    var bh = bw * 0.62;
+    fill('rgba(0,0,0,0.4)'); rect(sx - bw * 0.55, sy - bh * 0.05, sx + bw * 0.55, sy + bh * 0.05);
+    fill(0x101010);
+    rect(sx - bw * 0.5, sy - bh * 0.22, sx - bw * 0.34, sy); rect(sx + bw * 0.34, sy - bh * 0.22, sx + bw * 0.5, sy);
+    fill(shade(col, 0.85)); rect(sx - bw * 0.36, sy - bh, sx + bw * 0.36, sy - bh * 0.5);
+    fill(0x1C2A38); rect(sx - bw * 0.30, sy - bh * 0.94, sx + bw * 0.30, sy - bh * 0.56);
+    fill(col); rect(sx - bw * 0.5, sy - bh * 0.58, sx + bw * 0.5, sy - bh * 0.14);
+    fill(braking ? 0xFF1F1F : 0x8E1A1A);
+    rect(sx - bw * 0.47, sy - bh * 0.52, sx - bw * 0.30, sy - bh * 0.38); rect(sx + bw * 0.30, sy - bh * 0.52, sx + bw * 0.47, sy - bh * 0.38);
+    fill(0x222222); rect(sx - bw * 0.5, sy - bh * 0.2, sx + bw * 0.5, sy - bh * 0.1);
+  }
+
+  /* ---------------- cockpit ---------------- */
+  function drawCockpit() {
+    var v;
+    fill(0xD4531B);
+    ctx.beginPath(); ctx.moveTo(w * 0.08, h * 0.82); ctx.quadraticCurveTo(w * 0.5, h * 0.60, w * 0.92, h * 0.82);
+    ctx.lineTo(w * 0.92, h); ctx.lineTo(w * 0.08, h); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = C(0xF0884A); ctx.lineWidth = h * 0.008;
+    ctx.beginPath(); ctx.moveTo(w * 0.1, h * 0.815); ctx.quadraticCurveTo(w * 0.5, h * 0.615, w * 0.9, h * 0.815); ctx.stroke();
+    fill(0x14161A); rect(0, h * 0.80, w, h);
+    fill(0x2A2D33); rect(0, h * 0.80, w, h * 0.806);
+
+    var cx = w * 0.36, cy = h * 0.89, r = h * 0.115;
+    circle(cx, cy, r, 0x0B0C0E); ring(cx, cy, r, 0x5A5F66, h * 0.006);
+    for (v = 0; v <= 160; v += 20) {
+      var a = (135 + 270 * v / 160) * Math.PI / 180, co = Math.cos(a), si = Math.sin(a), major = (v % 40) === 0, r0 = r * (major ? 0.72 : 0.82);
+      line(cx + co * r0, cy + si * r0, cx + co * r * 0.92, cy + si * r * 0.92, 0xFFFFFF, h * 0.004);
+      if (major) txt(SPD_LBL[v / 40], cx + co * r * 0.55, cy + si * r * 0.55 + h * 0.01 + h * 0.008, h * 0.022, 0xDDDDDD, 'center', false);
+    }
+    var sv = Math.min(160, Math.abs(speed)), na = (135 + 270 * sv / 160) * Math.PI / 180;
+    line(cx, cy, cx + Math.cos(na) * r * 0.82, cy + Math.sin(na) * r * 0.82, 0xFF3B30, h * 0.007);
+    circle(cx, cy, r * 0.08, 0xCCCCCC);
+    txt(String(Math.round(Math.abs(speed))), cx, cy + r * 0.52 + r * 0.1, r * 0.30, 0xFFFFFF, 'center', true);
+    txt('km/h', cx, cy + r * 0.80 + r * 0.05, r * 0.14, 0xAAAAAA, 'center', false);
+
+    var fx = w * 0.63, fr = h * 0.10;
+    circle(fx, cy, fr, 0x0B0C0E); ring(fx, cy, fr, fuel < 0.2 ? 0xFF3B30 : 0x5A5F66, h * 0.006);
+    txt('E', fx - fr * 0.55, cy + fr * 0.55 + fr * 0.09, fr * 0.26, 0xFF6B5A, 'center', true);
+    txt('F', fx + fr * 0.55, cy + fr * 0.55 + fr * 0.09, fr * 0.26, 0x7CFF8A, 'center', true);
+    txt('FUEL', fx, cy - fr * 0.35 + fr * 0.07, fr * 0.20, 0xAAAAAA, 'center', false);
+    var fa = (135 + 270 * fuel) * Math.PI / 180;
+    line(fx, cy, fx + Math.cos(fa) * fr * 0.8, cy + Math.sin(fa) * fr * 0.8, 0xFF3B30, h * 0.006);
+    circle(fx, cy, fr * 0.08, 0xCCCCCC);
+
+    var blink = (Math.floor(clock * 2.5) & 1) === 0, iy = h * 0.865;
+    tri(w * 0.465, iy, w * 0.485, iy - h * 0.025, w * 0.485, iy + h * 0.025, ((blinkL || haz) && blink) ? 0x35E65B : 0x1B3A22);
+    tri(w * 0.535, iy, w * 0.515, iy - h * 0.025, w * 0.515, iy + h * 0.025, ((blinkR || haz) && blink) ? 0x35E65B : 0x1B3A22);
+    tri(w * 0.5, iy - h * 0.035, w * 0.488, iy + h * 0.02, w * 0.512, iy + h * 0.02, (haz && blink) ? 0xFF2A2A : 0x5A1414);
+
+    pill(w * 0.04, h * 0.86, w * 0.115, h * 0.95, brk ? 0xFF3B30 : 0x2A2D33);
+    pill(w * 0.13, h * 0.86, w * 0.205, h * 0.95, gas ? 0x35E65B : 0x2A2D33);
+    txt('BRAKE', w * 0.0775, h * 0.915, h * 0.026, 0xFFFFFF, 'center', true);
+    txt('GAS', w * 0.1675, h * 0.915, h * 0.026, 0xFFFFFF, 'center', true);
+
+    var wx = w * 0.87, wy = h * 0.80, wr = h * 0.20;
+    ctx.save(); ctx.translate(wx, wy); ctx.rotate(steer * 70 * Math.PI / 180); ctx.translate(-wx, -wy);
+    line(wx - wr, wy, wx + wr, wy, 0x2B2E35, wr * 0.14);
+    line(wx, wy, wx, wy + wr, 0x2B2E35, wr * 0.14);
+    ring(wx, wy, wr, 0x23252B, wr * 0.17);
+    ring(wx, wy, wr * 1.07, 0x3A3D45, wr * 0.025);
+    circle(wx, wy, wr * 0.27, 0x30333B);
+    line(wx, wy - wr, wx, wy - wr * 0.76, 0xFFC107, wr * 0.07);
+    ctx.restore();
+  }
+
+  /* ---------------- HUD ---------------- */
+  function arrow(cx, cy, s, dir, color) {
+    ctx.strokeStyle = C(color); ctx.lineWidth = s * 0.28; ctx.lineCap = 'butt';
+    if (dir === 0) {
+      ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.55); ctx.lineTo(cx, cy - s * 0.15); ctx.stroke();
+      tri(cx - s * 0.4, cy - s * 0.15, cx + s * 0.4, cy - s * 0.15, cx, cy - s * 0.75, color);
+    } else {
+      var vx = cx - dir * s * 0.4;
+      ctx.beginPath(); ctx.moveTo(vx, cy + s * 0.55); ctx.lineTo(vx, cy - s * 0.1); ctx.lineTo(cx + dir * s * 0.1, cy - s * 0.1); ctx.stroke();
+      tri(cx + dir * s * 0.05, cy - s * 0.1 - s * 0.4, cx + dir * s * 0.05, cy - s * 0.1 + s * 0.4, cx + dir * s * 0.6, cy - s * 0.1, color);
+    }
+  }
+  function drawHud() {
+    txt(fmt(time), w * 0.05, h * 0.085, h * 0.075, 0xFFFFFF, 'left', true);
+    if (test) txt('Score ' + Math.floor(score) + '   Lap ' + Math.floor(100 * Math.min(1, traveled / TLEN)) + '%', w * 0.05, h * 0.15, h * 0.045, score < 70 ? 0xFF8A80 : 0xB9F6CA, 'left', true);
+    var ps = Math.min(T - 1, Math.floor(pos / SEG)), dir = 0, dist = 0, s;
+    for (s = 0; s < 130; s++) {
+      var cu = CURVE[(ps + s) % T];
+      if (Math.abs(cu) > 0.8) { dir = cu > 0 ? 1 : -1; dist = s * MPS; break; }
+    }
+    arrow(w * 0.5, h * 0.17, h * 0.10, dir, dir === 0 ? 0x35E65B : 0xFF5A1F);
+    var lbl = dir === 0 ? 'Straight' : (dist < 6 ? (dir > 0 ? 'Curve right' : 'Curve left') : (Math.floor(dist / 5) * 5) + ' m');
+    txt(lbl, w * 0.5, h * 0.31, h * 0.06, 0xFFFFFF, 'center', true);
+
+    var lim = LIM[Math.min(LIM.length - 1, Math.floor(ps / 300))], over = speed > lim + 4;
+    var sx = w * 0.86, sy = h * 0.14, sr = h * 0.065;
+    circle(sx, sy, sr, (over && (Math.floor(clock * 3) & 1) === 0) ? 0xFFD0D0 : 0xFFFFFF);
+    ring(sx, sy, sr * 0.88, 0xE53935, sr * 0.22);
+    ctx.font = 'bold ' + Math.round(sr * 0.8) + 'px Arial, Helvetica, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    fill(0x111111); ctx.fillText(String(lim), sx, sy + sr * 0.28);
+
+    for (s = 0; s < 4; s++) {
+      var on = s === gear;
+      txt(GEARS[s], w * 0.955, h * 0.10 + s * h * 0.085 + h * 0.02, on ? h * 0.07 : h * 0.05, on ? 0xFFB300 : 'rgba(255,255,255,0.6)', 'center', true);
+    }
+    var tw;
+    if (msgT > 0 && msg.length > 0) {
+      tw = h * 0.05 * msg.length * 0.52;
+      pill(w * 0.5 - tw * 0.5 - h * 0.03, h * 0.36, w * 0.5 + tw * 0.5 + h * 0.03, h * 0.435, msgBad ? 'rgba(183,28,28,0.8)' : 'rgba(27,94,32,0.8)');
+      txt(msg, w * 0.5, h * 0.41 + h * 0.012, h * 0.045, 0xFFFFFF, 'center', true);
+    } else if (hint.length > 0) {
+      tw = h * 0.04 * hint.length * 0.52;
+      pill(w * 0.5 - tw * 0.5 - h * 0.03, h * 0.36, w * 0.5 + tw * 0.5 + h * 0.03, h * 0.43, 'rgba(0,0,0,0.67)');
+      txt(hint, w * 0.5, h * 0.405 + h * 0.01, h * 0.04, 0xFFEB3B, 'center', true);
+    }
+  }
+
+  /* ---------------- menus ---------------- */
+  function drawItems(top, l, r) {
+    var it = items(), step = h * 0.105, i;
+    for (i = 0; i < it.length; i++) {
+      var y = top + i * step;
+      if (i === sel) pill(w * l, y - h * 0.07, w * r, y + h * 0.025, 0xFF9800);
+      txt(it[i], w * 0.5, y, h * 0.052, i === sel ? 0x000000 : 0xFFFFFF, 'center', true);
+    }
+  }
+  function drawMenu(title) {
+    fill('rgba(0,0,0,0.67)'); rect(0, 0, w, h);
+    txt(title, w * 0.5, h * 0.2, h * 0.09, 0xFFFFFF, 'center', true);
+    drawItems(h * 0.36, 0.25, 0.75);
+    if (state === S_MENU) {
+      var s = h * 0.034;
+      if (best > 0) txt('Best test score: ' + best, w * 0.5, h * 0.27, h * 0.04, 0xFFD54F, 'center', true);
+      txt('UP = accelerator (hold)     DOWN = brake (hold)     LEFT / RIGHT = steering', w * 0.5, h * 0.855, s, 0xDDDDDD, 'center', false);
+      txt('OK = change gear when stopped (P > D > R > N)     BACK = pause', w * 0.5, h * 0.905, s, 0xDDDDDD, 'center', false);
+      txt('1/RED = left     3/GREEN = right     2/YELLOW = hazard     4/BLUE = horn', w * 0.5, h * 0.955, s, 0xDDDDDD, 'center', false);
+    }
+  }
+  function drawResult() {
+    fill('rgba(0,0,0,0.8)'); rect(0, 0, w, h);
+    txt(resTitle, w * 0.5, h * 0.2, h * 0.10, resPass ? 0x69F0AE : 0xFF8A80, 'center', true);
+    if (test) {
+      txt('Score ' + Math.floor(score) + ' / 100     Time ' + fmt(time), w * 0.5, h * 0.30, h * 0.05, 0xFFFFFF, 'center', true);
+      txt(resPass ? 'You may be given a licence! (need 70+)' : 'You need 70+ points to pass. Try again!', w * 0.5, h * 0.36, h * 0.04, 0xDDDDDD, 'center', false);
+      txt((newBest ? 'New best score! ' : 'Best score: ') + best, w * 0.5, h * 0.42, h * 0.04, 0xFFD54F, 'center', true);
+    } else txt('Time ' + fmt(time), w * 0.5, h * 0.30, h * 0.05, 0xFFFFFF, 'center', true);
+    drawItems(h * 0.58, 0.3, 0.7);
+  }
+
+  function draw() {
+    drawScene();
+    if (state !== S_MENU) { drawCockpit(); drawHud(); }
+    if (state === S_MENU) drawMenu('LITE DRIVING SCHOOL');
+    else if (state === S_PAUSE) drawMenu('PAUSED');
+    else if (state === S_RESULT) drawResult();
+  }
+
+  spawnTraffic();
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>BlockCraft</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Arrows: walk and turn. OK: break. 1: place. 2: jump. 3: next block. 4: look up\/down. Back: pause.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H;
+  var NX = 64, NY = 32, NZ = 64, SEA = 6, F = 700;
+  var world = new Array(NX * NY * NZ), i;
+  var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, PLANKS = 6, SAND = 7, BRICK = 8, WATER = 9, GLASS = 10;
+  var COL = [null, ['#5da83a', '#8a6a3f', '#8a6a3f'], ['#8a6a3f', '#8a6a3f', '#8a6a3f'], ['#8d8d8d', '#8d8d8d', '#8d8d8d'], ['#b79257', '#6b4f2b', '#b79257'],
+    ['#3f8f2f', '#3f8f2f', '#3f8f2f'], ['#c19a5b', '#c19a5b', '#c19a5b'], ['#e6d696', '#e6d696', '#e6d696'], ['#a5503f', '#a5503f', '#a5503f'], ['#3d6fd8', '#3d6fd8', '#3d6fd8'], ['#bfe6f5', '#bfe6f5', '#bfe6f5']];
+  var RGB = []; (function () {
+    for (var t = 1; t < COL.length; t++) { RGB[t] = []; for (var k = 0; k < 3; k++) { var s = COL[t][k]; RGB[t][k] = [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)]; } }
+  })();
+  var HOT = [GRASS, DIRT, STONE, WOOD, PLANKS, BRICK, GLASS, SAND], HOTNAME = ['Grass', 'Dirt', 'Stone', 'Log', 'Planks', 'Brick', 'Glass', 'Sand'];
+  var SKY = [168, 208, 250];
+  var BRIGHT = [0.82, 0.72, 1.0, 0.5, 0.9, 0.66];
+
+  function idx(x, y, z) { return (y * NZ + z) * NX + x; }
+  function get(x, y, z) {
+    if (y < 0) return STONE;
+    if (y >= NY) return AIR;
+    if (x < 0 || z < 0 || x >= NX || z >= NZ) return STONE;
+    return world[idx(x, y, z)];
+  }
+  function set(x, y, z, t) { if (x >= 0 && y >= 0 && z >= 0 && x < NX && y < NY && z < NZ) world[idx(x, y, z)] = t; }
+  function solid(t) { return t !== AIR && t !== WATER; }
+  function opaque(t) { return t !== AIR && t !== WATER && t !== GLASS; }
+  function hash2(x, z) { var n = Math.sin(x * 127.1 + z * 311.7) * 43758.5453; return n - Math.floor(n); }
+
+  /* ------------------------------------------------------------ world */
+  function terrain(x, z) {
+    var dx = x - 32, dz = z - 32, d = Math.sqrt(dx * dx + dz * dz);
+    var h = 8.5 + 2.4 * Math.sin(x * 0.09) + 2 * Math.cos(z * 0.1) + 1.6 * Math.sin((x + z) * 0.06) + 0.7 * Math.sin(x * 0.3 + z * 0.2) * Math.cos(z * 0.27);
+    var mx = x - 46, mz = z - 16; h += 7 * Math.exp(-(mx * mx + mz * mz) / 150);
+    h -= Math.max(0, d - 20) * 0.35;
+    return Math.max(2, Math.floor(h));
+  }
+  function build() {
+    var x, y, z, h, t;
+    for (i = 0; i < world.length; i++) world[i] = AIR;
+    for (x = 0; x < NX; x++) for (z = 0; z < NZ; z++) {
+      h = terrain(x, z);
+      for (y = 0; y <= h; y++) {
+        if (y < h - 3) t = STONE; else if (y < h) t = DIRT; else t = (h <= SEA + 1) ? SAND : GRASS;
+        set(x, y, z, t);
+      }
+      for (y = h + 1; y <= SEA; y++) set(x, y, z, WATER);
+    }
+    for (x = 3; x < NX - 3; x++) for (z = 3; z < NZ - 3; z++) {
+      h = terrain(x, z);
+      if (get(x, h, z) === GRASS && h >= 8 && hash2(x, z) < 0.02) {
+        var th = 4 + Math.floor(hash2(z, x) * 2), a, b;
+        for (y = h + 1; y <= h + th; y++) set(x, y, z, WOOD);
+        for (y = h + th - 1; y <= h + th + 1; y++) {
+          var r = (y >= h + th + 1) ? 1 : 2;
+          for (a = -r; a <= r; a++) for (b = -r; b <= r; b++) {
+            if (r === 2 && Math.abs(a) === 2 && Math.abs(b) === 2) continue;
+            if (get(x + a, y, z + b) === AIR) set(x + a, y, z + b, LEAVES);
+          }
+        }
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------ edits are saved in the browser */
+  var edits = TV.store.get('bc_edits', []);
+  if (!(edits instanceof Array)) edits = [];
+  function applyEdits() { for (var e = 0; e < edits.length; e++) set(edits[e][0], edits[e][1], edits[e][2], edits[e][3]); }
+  function recordEdit(x, y, z, t) {
+    for (var e = 0; e < edits.length; e++) if (edits[e][0] === x && edits[e][1] === y && edits[e][2] === z) { edits[e][3] = t; saveEdits(); return; }
+    if (edits.length < 5000) edits.push([x, y, z, t]);
+    saveEdits();
+  }
+  function saveEdits() { TV.store.set('bc_edits', edits); }
+
+  /* ------------------------------------------------------------ player */
+  var px = 32.5, py = 20, pz = 32.5, vx = 0, vy = 0, vz = 0, yaw = 0, pitch = -0.12, onGround = false, inWater = false;
+  var HW = 0.3, PH = 1.8, EYE = 1.62;
+  var sel = 0, lookMode = false, state = 0, t = 0, mineT = 0, msg = '', msgT = 0, R = 10, avg = 0.016;
+  var TITLE = 0, PLAY = 1, PAUSE = 2;
+  function spawn() {
+    var best = 0, bx = 32, bz = 32, r, a;
+    for (r = 0; r < 20 && !best; r++) for (a = 0; a < 16; a++) {
+      var x = Math.floor(32 + Math.cos(a * 0.3927) * r), z = Math.floor(32 + Math.sin(a * 0.3927) * r), h = terrain(x, z);
+      if (h >= 8 && h <= 12) { best = h; bx = x; bz = z; break; }
+    }
+    px = bx + 0.5; pz = bz + 0.5; py = (best || terrain(bx, bz)) + 1.01; vy = 0;
+    var bh = 1e9, ba = 0, q, hs, h0 = terrain(bx, bz), k;
+    for (q = 0; q < 16; q++) {
+      var an = q * 0.3927; hs = 0;
+      for (k = 3; k <= 15; k += 4) { var th = terrain(Math.floor(px + Math.sin(an) * k), Math.floor(pz - Math.cos(an) * k)); hs += Math.abs(th - h0) + (th <= SEA + 1 ? 3 : 0); }
+      if (hs < bh) { bh = hs; ba = an; }
+    }
+    yaw = ba; pitch = -0.1;
+  }
+  function hits(x, y, z) {
+    var x0 = Math.floor(x - HW), x1 = Math.floor(x + HW), y0 = Math.floor(y), y1 = Math.floor(y + PH - 0.01), z0 = Math.floor(z - HW), z1 = Math.floor(z + HW), a, b, d;
+    for (a = x0; a <= x1; a++) for (b = y0; b <= y1; b++) for (d = z0; d <= z1; d++) if (solid(get(a, b, d))) return true;
+    return false;
+  }
+  function move(dt) {
+    var f = 0, sd = 0;
+    if (TV.held.left) yaw -= 1.9 * dt;
+    if (TV.held.right) yaw += 1.9 * dt;
+    if (lookMode) { if (TV.held.up) pitch += 1.3 * dt; if (TV.held.down) pitch -= 1.3 * dt; pitch = TV.clamp(pitch, -1.3, 1.3); }
+    else { if (TV.held.up) f += 1; if (TV.held.down) f -= 1; }
+    var sp = (inWater ? 2.4 : 4.4) * f;
+    var tvx = Math.sin(yaw) * sp, tvz = -Math.cos(yaw) * sp;
+    vx += (tvx - vx) * Math.min(1, dt * 14); vz += (tvz - vz) * Math.min(1, dt * 14);
+    inWater = get(Math.floor(px), Math.floor(py + 0.6), Math.floor(pz)) === WATER;
+    vy -= (inWater ? 6 : 24) * dt;
+    if (inWater && vy < -3) vy = -3;
+    if (vy < -30) vy = -30;
+    var nx = px + vx * dt; if (!hits(nx, py, pz)) px = nx; else vx = 0;
+    var nz = pz + vz * dt; if (!hits(px, py, nz)) pz = nz; else vz = 0;
+    var ny = py + vy * dt; onGround = false;
+    if (!hits(px, ny, pz)) py = ny; else { if (vy < 0) onGround = true; vy = 0; }
+    px = TV.clamp(px, 0.5, NX - 0.5); pz = TV.clamp(pz, 0.5, NZ - 0.5);
+    if (py < -5) spawn();
+  }
+  function jump() { if (onGround) { vy = 8.2; onGround = false; } else if (inWater) vy = 3.6; }
+
+  /* ------------------------------------------------------------ targeting */
+  var hx = 0, hy = 0, hz = 0, hasT = false, ax = 0, ay = 0, az = 0;
+  function eyeDir() { var cp = Math.cos(pitch); return [Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp]; }
+  function target() {
+    var d = eyeDir(), ex = px, ey = py + EYE, ez = pz, s, lx = Math.floor(ex), ly = Math.floor(ey), lz = Math.floor(ez);
+    hasT = false;
+    for (s = 0.05; s < 5.2; s += 0.04) {
+      var bx = Math.floor(ex + d[0] * s), by = Math.floor(ey + d[1] * s), bz = Math.floor(ez + d[2] * s);
+      if (bx !== lx || by !== ly || bz !== lz) {
+        if (by >= 0 && by < NY && bx >= 0 && bz >= 0 && bx < NX && bz < NZ && solid(get(bx, by, bz))) { hx = bx; hy = by; hz = bz; ax = lx; ay = ly; az = lz; hasT = true; return; }
+        lx = bx; ly = by; lz = bz;
+      }
+    }
+  }
+  function say(m) { msg = m; msgT = 1.6; }
+  function mine() {
+    if (!hasT || hy === 0) return;
+    set(hx, hy, hz, AIR); recordEdit(hx, hy, hz, AIR); TV.beep(150, 0.08, 'square', 0.09, -40);
+  }
+  function place() {
+    if (!hasT) return;
+    var tt = get(ax, ay, az);
+    if (ay < 1 || ay >= NY || (tt !== AIR && tt !== WATER)) return;
+    set(ax, ay, az, HOT[sel]);
+    if (hits(px, py, pz)) { set(ax, ay, az, tt); return; }
+    recordEdit(ax, ay, az, HOT[sel]); TV.beep(260, 0.06, 'square', 0.09);
+  }
+
+  /* ------------------------------------------------------------ input */
+  TV.on(function (type, key, rep) {
+    if (type !== 'down') return;
+    if (key === 'back') { if (state === PLAY) { state = PAUSE; } else if (state === PAUSE || state === TITLE) { TV.exit(); } return; }
+    if (state === TITLE) { if (key === 'ok' || key === 'start') { state = PLAY; } return; }
+    if (state === PAUSE) { if (key === 'ok' || key === 'start') state = PLAY; return; }
+    if (key === 'start') { state = PAUSE; return; }
+    if (rep) return;
+    if (key === 'ok') { mine(); mineT = 0.28; }
+    else if (key === 'k1') place();
+    else if (key === 'k2') jump();
+    else if (key === 'k3') { sel = (sel + 1) % HOT.length; say(HOTNAME[sel]); }
+    else if (key === 'k4') { lookMode = !lookMode; say(lookMode ? 'Look mode: Up/Down tilt the view' : 'Walk mode: Up/Down walk'); }
+  });
+  /* extra on-screen buttons for touch screens (the shared pad has no number keys) */
+  (function () {
+    var pad = document.getElementById('pad'); if (!pad) return;
+    var row = document.createElement('div'), defs = [['k1', 'Place'], ['k2', 'Jump'], ['k3', 'Next'], ['k4', 'Look']];
+    function wire(b, k) {
+      function dn(e) { e.preventDefault(); TV.fire('down', k, false); }
+      function up(e) { e.preventDefault(); TV.fire('up', k, false); }
+      b.addEventListener('touchstart', dn, false); b.addEventListener('touchend', up, false);
+      b.addEventListener('mousedown', dn, false); b.addEventListener('mouseup', up, false);
+    }
+    for (var d = 0; d < defs.length; d++) { var b = document.createElement('span'); b.className = 'pb'; b.style.fontSize = '12px'; b.appendChild(document.createTextNode(defs[d][1])); wire(b, defs[d][0]); row.appendChild(b); }
+    pad.appendChild(row);
+  })();
+
+  function update(dt) {
+    t += dt;
+    if (dt > 0.05) dt = 0.05;
+    avg += (dt - avg) * 0.05;
+    if (msgT > 0) msgT -= dt;
+    if (state !== PLAY) return;
+    move(dt);
+    if (TV.held.k2 && onGround) jump();
+    if (TV.held.ok) { mineT -= dt; if (mineT <= 0) { target(); mine(); mineT = 0.28; } }
+    /* keep the frame rate smooth by drawing fewer blocks on slow screens */
+    if (avg > 0.024 && R > 6) R -= 0.02; else if (avg < 0.0175 && R < 11) R += 0.01;
+  }
+
+  /* ------------------------------------------------------------ rendering */
+  var FC = [
+    [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
+    [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
+    [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+    [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+    [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+    [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]]
+  ];
+  var ND = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  var MAXF = 3600, pool = [], order = [], nf = 0;
+  for (i = 0; i < MAXF; i++) pool.push({ d: 0, n: 0, x: [0, 0, 0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0, 0, 0], col: '', a: 1 });
+  var cy_ = 0, sY = 0, cY = 1, sP = 0, cP = 1, ex = 0, ey = 0, ez = 0;
+  var vx_ = [0, 0, 0, 0], vy_ = [0, 0, 0, 0], vz_ = [0, 0, 0, 0];
+
+  function tx(x, y, z, o, k) {         // world -> camera, stored in vx_/vy_/vz_ [k]
+    var rx = x - ex, ry = y - ey, rz = z - ez;
+    var cx = rx * cY + rz * sY, fz = rx * sY - rz * cY;
+    o[0] = cx; o[1] = -fz * sP + ry * cP; o[2] = fz * cP + ry * sP;
+  }
+  var tmp = [0, 0, 0];
+  var inX = [0, 0, 0, 0, 0, 0, 0], inY = [0, 0, 0, 0, 0, 0, 0], inZ = [0, 0, 0, 0, 0, 0, 0];
+
+  /* Add one face (4 world corners) to the draw list, clipping against the near plane. */
+  function addFace(c4, bx, by, bz, y0, y1, color, bright, alpha, cd) {
+    if (nf >= MAXF) return;
+    var k, n = 0, NEAR = 0.08;
+    for (k = 0; k < 4; k++) {
+      var cc = c4[k], yy = cc[1] === 1 ? y1 : y0;
+      tx(bx + cc[0], by + yy, bz + cc[2], tmp, k);
+      inX[k] = tmp[0]; inY[k] = tmp[1]; inZ[k] = tmp[2];
+    }
+    var f = pool[nf], outc = 0;
+    for (k = 0; k < 4; k++) {
+      var k2 = (k + 1) & 3, za = inZ[k], zb = inZ[k2];
+      if (za >= NEAR) { f.x[outc] = W / 2 + inX[k] / za * F; f.y[outc] = H / 2 - inY[k] / za * F; outc++; }
+      if ((za >= NEAR) !== (zb >= NEAR)) {
+        var u = (NEAR - za) / (zb - za), qx = inX[k] + (inX[k2] - inX[k]) * u, qy = inY[k] + (inY[k2] - inY[k]) * u;
+        f.x[outc] = W / 2 + qx / NEAR * F; f.y[outc] = H / 2 - qy / NEAR * F; outc++;
+      }
+    }
+    if (outc < 3) return;
+    f.n = outc; f.d = cd; f.a = alpha;
+    var fog = TV.clamp((Math.sqrt(cd) - (R - 3.2)) / 3.2, 0, 1), r = color[0] * bright, g = color[1] * bright, b = color[2] * bright;
+    r = Math.round(r + (SKY[0] - r) * fog); g = Math.round(g + (SKY[1] - g) * fog); b = Math.round(b + (SKY[2] - b) * fog);
+    f.col = 'rgb(' + r + ',' + g + ',' + b + ')';
+    order[nf++] = f;
+  }
+
+  function drawBlocks() {
+    var cp = Math.cos(pitch), fx = sY * cp, fy = sP, fz = -cY * cp, rr = Math.ceil(R), bx0 = Math.floor(ex), bz0 = Math.floor(ez), by0 = Math.floor(ey), r2 = R * R;
+    var x, y, z, dd, tp, rgb, vx2, vy2, vz2;
+    nf = 0;
+    for (x = bx0 - rr; x <= bx0 + rr; x++) for (z = bz0 - rr; z <= bz0 + rr; z++) {
+      if (x < 0 || z < 0 || x >= NX || z >= NZ) continue;
+      for (y = Math.max(0, by0 - rr); y <= Math.min(NY - 1, by0 + rr); y++) {
+        tp = world[idx(x, y, z)];
+        if (tp === AIR) continue;
+        vx2 = x + 0.5 - ex; vy2 = y + 0.5 - ey; vz2 = z + 0.5 - ez;
+        dd = vx2 * vx2 + vy2 * vy2 + vz2 * vz2;
+        if (dd > r2) continue;
+        if (vx2 * fx + vy2 * fy + vz2 * fz < -1.6) continue;
+        var tone = 0.93 + 0.14 * (((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) & 255) / 255;
+        for (var d = 0; d < 6; d++) {
+          var nd = ND[d];
+          if (d === 0 ? ex < x + 1 : d === 1 ? ex > x : d === 2 ? ey < y + 1 : d === 3 ? ey > y : d === 4 ? ez < z + 1 : ez > z) continue;
+          var nt = get(x + nd[0], y + nd[1], z + nd[2]);
+          if (tp === WATER) { if (d !== 2 || nt !== AIR) continue; }
+          else if (tp === GLASS) { if (nt === GLASS || opaque(nt)) continue; }
+          else if (opaque(nt)) continue;
+          rgb = RGB[tp][d === 2 ? 0 : d === 3 ? 2 : 1];
+          var br = BRIGHT[d] * tone, al = tp === WATER ? 0.72 : tp === GLASS ? 0.38 : 1;
+          if (tp === GRASS && d !== 2 && d !== 3) {
+            addFace(FC[d], x, y, z, 0, 0.78, RGB[GRASS][1], br, 1, dd);
+            addFace(FC[d], x, y, z, 0.78, 1, RGB[GRASS][0], br * 0.95, 1, dd);
+          } else addFace(FC[d], x, y, z, 0, tp === WATER ? 0.88 : 1, rgb, br, al, dd);
+        }
+      }
+    }
+    order.length = nf;
+    order.sort(function (a, b) { return b.d - a.d; });
+    var f, n, k;
+    c.lineWidth = 1; c.lineJoin = 'round';
+    for (i = 0; i < nf; i++) {
+      f = order[i]; n = f.n;
+      c.globalAlpha = f.a; c.fillStyle = f.col;
+      c.beginPath(); c.moveTo(f.x[0], f.y[0]);
+      for (k = 1; k < n; k++) c.lineTo(f.x[k], f.y[k]);
+      c.closePath(); c.fill();
+      if (f.a === 1) { c.strokeStyle = f.col; c.stroke(); }
+    }
+    c.globalAlpha = 1;
+  }
+
+  var ca = [0, 0, 0], cb = [0, 0, 0];
+  function line3(x0, y0, z0, x1, y1, z1) {
+    tx(x0, y0, z0, ca); tx(x1, y1, z1, cb);
+    if (ca[2] < 0.08 || cb[2] < 0.08) return;
+    c.moveTo(W / 2 + ca[0] / ca[2] * F, H / 2 - ca[1] / ca[2] * F); c.lineTo(W / 2 + cb[0] / cb[2] * F, H / 2 - cb[1] / cb[2] * F);
+  }
+  function outline() {
+    if (!hasT) return;
+    var x = hx - 0.002, y = hy - 0.002, z = hz - 0.002, s = 1.004;
+    c.strokeStyle = 'rgba(0,0,0,0.85)'; c.lineWidth = 2.2; c.beginPath();
+    line3(x, y, z, x + s, y, z); line3(x + s, y, z, x + s, y, z + s); line3(x + s, y, z + s, x, y, z + s); line3(x, y, z + s, x, y, z);
+    line3(x, y + s, z, x + s, y + s, z); line3(x + s, y + s, z, x + s, y + s, z + s); line3(x + s, y + s, z + s, x, y + s, z + s); line3(x, y + s, z + s, x, y + s, z);
+    line3(x, y, z, x, y + s, z); line3(x + s, y, z, x + s, y + s, z); line3(x + s, y, z + s, x + s, y + s, z + s); line3(x, y, z + s, x, y + s, z + s);
+    c.stroke();
+  }
+
+  function swatch(type, x, y, s) {
+    c.fillStyle = COL[type][0]; c.fillRect(x, y, s, s * 0.35);
+    c.fillStyle = COL[type][1]; c.fillRect(x, y + s * 0.35, s, s * 0.65);
+    if (type === GLASS) { c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(x + 3, y + 3, s - 6, s - 6); }
+  }
+  function hud() {
+    var cx = W / 2, cyy = H / 2;
+    c.strokeStyle = 'rgba(255,255,255,0.9)'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx - 9, cyy); c.lineTo(cx + 9, cyy); c.moveTo(cx, cyy - 9); c.lineTo(cx, cyy + 9); c.stroke();
+    var n = HOT.length, s = 44, gap = 6, x0 = (W - n * (s + gap)) / 2, y0 = H - 82, k;
+    for (k = 0; k < n; k++) {
+      var x = x0 + k * (s + gap);
+      c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillRect(x - 3, y0 - 3, s + 6, s + 6);
+      swatch(HOT[k], x, y0, s);
+      if (k === sel) { c.strokeStyle = '#fff'; c.lineWidth = 3; c.strokeRect(x - 4, y0 - 4, s + 8, s + 8); }
+    }
+    TV.text(HOTNAME[sel] + (lookMode ? '   [look mode]' : ''), W / 2, y0 - 12, 18, '#fff', 'center');
+    if (msgT > 0) TV.text(msg, W / 2, 70, 22, '#fff', 'center');
+    TV.text('x ' + Math.floor(px) + '  y ' + Math.floor(py) + '  z ' + Math.floor(pz), 14, 24, 16, 'rgba(255,255,255,0.85)', 'left');
+  }
+
+  function draw() {
+    sY = Math.sin(yaw); cY = Math.cos(yaw); sP = Math.sin(pitch); cP = Math.cos(pitch);
+    ex = px; ey = py + EYE; ez = pz;
+    var g = c.createLinearGradient(0, 0, 0, H * 0.65); g.addColorStop(0, '#6fa8f0'); g.addColorStop(1, 'rgb(' + SKY[0] + ',' + SKY[1] + ',' + SKY[2] + ')');
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+    target();
+    drawBlocks();
+    outline();
+    if (get(Math.floor(ex), Math.floor(ey), Math.floor(ez)) === WATER) { c.fillStyle = 'rgba(30,80,200,0.35)'; c.fillRect(0, 0, W, H); }
+    if (state === PLAY) hud();
+    else if (state === TITLE) TV.panel('BLOCKCRAFT', ['Press OK to start', 'Up/Down walk, Left/Right turn', 'OK breaks a block, 1 places, 2 jumps', '3 changes block, 4 lets Up/Down look up and down'], '#5da83a');
+    else TV.panel('PAUSED', ['OK: continue', 'Back: return to the menu', 'Your building is saved on this device'], '#44b8ff');
+  }
+
+  build(); applyEdits(); spawn();
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>
