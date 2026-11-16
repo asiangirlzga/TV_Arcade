@@ -14,12 +14,12 @@ Eleven games (Block Hero, Snake, Brick Smash, Star Blaster, Sky Hop, 2048, Train
 No Android SDK is needed on your computer:
 1. Create a new GitHub repository and upload this folder's contents.
 2. Open the Actions tab and run **Build APK** (it also runs on every push to `main`).
-3. Download `app-release.apk` from the run's artifacts or from Releases.
+3. Download `tv-arcade.apk` from the run's artifacts or from Releases.
 
 Or open the folder in Android Studio and run `gradle assembleDebug`.
 
 ## Install on the TV
-Copy the APK to a USB stick, or use "Send files to TV" / `adb install app-release.apk`, and allow installs from unknown sources. It appears in the Android TV launcher as TV Arcade. It needs Android 5.0+ and Android System WebView (preinstalled on almost all TVs).
+Copy the APK to a USB stick, or use "Send files to TV" / `adb install tv-arcade.apk`, and allow installs from unknown sources. It appears in the Android TV launcher as TV Arcade. It needs Android 5.0+ and Android System WebView (preinstalled on almost all TVs).
 
 ## Updating the games
 When the PHP games change: `tools/prerender.sh /path/to/tvarcade` (needs PHP on the command line), commit, and rebuild.
