@@ -159,13 +159,13 @@ var TV = (function () {
   var c = TV.ctx, W = TV.W, H = TV.H;
   var NX = 64, NY = 32, NZ = 64, SEA = 6, F = 700;
   var world = new Array(NX * NY * NZ), i;
-  var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, PLANKS = 6, SAND = 7, BRICK = 8, WATER = 9, GLASS = 10;
+  var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, PLANKS = 6, SAND = 7, BRICK = 8, WATER = 9, GLASS = 10, PINK = 11;
   var COL = [null, ['#5da83a', '#8a6a3f', '#8a6a3f'], ['#8a6a3f', '#8a6a3f', '#8a6a3f'], ['#8d8d8d', '#8d8d8d', '#8d8d8d'], ['#b79257', '#6b4f2b', '#b79257'],
-    ['#3f8f2f', '#3f8f2f', '#3f8f2f'], ['#c19a5b', '#c19a5b', '#c19a5b'], ['#e6d696', '#e6d696', '#e6d696'], ['#a5503f', '#a5503f', '#a5503f'], ['#3d6fd8', '#3d6fd8', '#3d6fd8'], ['#bfe6f5', '#bfe6f5', '#bfe6f5']];
+    ['#3f8f2f', '#3f8f2f', '#3f8f2f'], ['#c19a5b', '#c19a5b', '#c19a5b'], ['#e6d696', '#e6d696', '#e6d696'], ['#a5503f', '#a5503f', '#a5503f'], ['#3d6fd8', '#3d6fd8', '#3d6fd8'], ['#bfe6f5', '#bfe6f5', '#bfe6f5'], ['#f2a7c6', '#f2a7c6', '#f2a7c6']];
   var RGB = []; (function () {
     for (var t = 1; t < COL.length; t++) { RGB[t] = []; for (var k = 0; k < 3; k++) { var s = COL[t][k]; RGB[t][k] = [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)]; } }
   })();
-  var HOT = [GRASS, DIRT, STONE, WOOD, PLANKS, BRICK, GLASS, SAND], HOTNAME = ['Grass', 'Dirt', 'Stone', 'Log', 'Planks', 'Brick', 'Glass', 'Sand'];
+  var HOT = [GRASS, DIRT, STONE, WOOD, PLANKS, BRICK, GLASS, SAND, PINK], HOTNAME = ['Grass', 'Dirt', 'Stone', 'Log', 'Planks', 'Brick', 'Glass', 'Sand', 'Pink leaves'];
   var SKY = [168, 208, 250];
   var BRIGHT = [0.82, 0.72, 1.0, 0.5, 0.9, 0.66];
 
@@ -203,13 +203,13 @@ var TV = (function () {
     for (x = 3; x < NX - 3; x++) for (z = 3; z < NZ - 3; z++) {
       h = terrain(x, z);
       if (get(x, h, z) === GRASS && h >= 8 && hash2(x, z) < 0.02) {
-        var th = 4 + Math.floor(hash2(z, x) * 2), a, b;
+        var th = 4 + Math.floor(hash2(z, x) * 2), a, b, lt = hash2(x * 3, z * 7) < 0.4 ? PINK : LEAVES;
         for (y = h + 1; y <= h + th; y++) set(x, y, z, WOOD);
         for (y = h + th - 1; y <= h + th + 1; y++) {
           var r = (y >= h + th + 1) ? 1 : 2;
           for (a = -r; a <= r; a++) for (b = -r; b <= r; b++) {
             if (r === 2 && Math.abs(a) === 2 && Math.abs(b) === 2) continue;
-            if (get(x + a, y, z + b) === AIR) set(x + a, y, z + b, LEAVES);
+            if (get(x + a, y, z + b) === AIR) set(x + a, y, z + b, lt);
           }
         }
       }
@@ -230,6 +230,7 @@ var TV = (function () {
   /* ------------------------------------------------------------ player */
   var px = 32.5, py = 20, pz = 32.5, vx = 0, vy = 0, vz = 0, yaw = 0, pitch = -0.12, onGround = false, inWater = false;
   var HW = 0.3, PH = 1.8, EYE = 1.62;
+  var third = TV.store.get('bc_third', true), HC = H / 2, camD = 0, camS = 0.75, walkPh = 0, swing = 0, RMAX = 12, po = 0;
   var sel = 0, lookMode = false, state = 0, t = 0, mineT = 0, msg = '', msgT = 0, R = 10, avg = 0.016;
   var TITLE = 0, PLAY = 1, PAUSE = 2;
   function spawn() {
@@ -276,11 +277,11 @@ var TV = (function () {
 
   /* ------------------------------------------------------------ targeting */
   var hx = 0, hy = 0, hz = 0, hasT = false, ax = 0, ay = 0, az = 0;
-  function eyeDir() { var cp = Math.cos(pitch); return [Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp]; }
+  function eyeDir() { var pp = pitch + po, cp = Math.cos(pp); return [Math.sin(yaw) * cp, Math.sin(pp), -Math.cos(yaw) * cp]; }
   function target() {
-    var d = eyeDir(), ex = px, ey = py + EYE, ez = pz, s, lx = Math.floor(ex), ly = Math.floor(ey), lz = Math.floor(ez);
+    var d = eyeDir(), s, s0 = third ? 0.5 : 0.05, lx = Math.floor(ex + d[0] * s0), ly = Math.floor(ey + d[1] * s0), lz = Math.floor(ez + d[2] * s0);
     hasT = false;
-    for (s = 0.05; s < 5.2; s += 0.04) {
+    for (s = s0; s < camD + 5.2; s += 0.04) {
       var bx = Math.floor(ex + d[0] * s), by = Math.floor(ey + d[1] * s), bz = Math.floor(ez + d[2] * s);
       if (bx !== lx || by !== ly || bz !== lz) {
         if (by >= 0 && by < NY && bx >= 0 && bz >= 0 && bx < NX && bz < NZ && solid(get(bx, by, bz))) { hx = bx; hy = by; hz = bz; ax = lx; ay = ly; az = lz; hasT = true; return; }
@@ -305,6 +306,7 @@ var TV = (function () {
   /* ------------------------------------------------------------ input */
   TV.on(function (type, key, rep) {
     if (type !== 'down') return;
+    if (key === 'view') { third = !third; TV.store.set('bc_third', third); RMAX = third ? 12 : 11; say(third ? 'Camera: behind the player' : 'Camera: first person'); return; }
     if (key === 'back') { if (state === PLAY) { state = PAUSE; } else if (state === PAUSE || state === TITLE) { TV.exit(); } return; }
     if (state === TITLE) { if (key === 'ok' || key === 'start') { state = PLAY; } return; }
     if (state === PAUSE) { if (key === 'ok' || key === 'start') state = PLAY; return; }
@@ -319,7 +321,7 @@ var TV = (function () {
   /* extra on-screen buttons for touch screens (the shared pad has no number keys) */
   (function () {
     var pad = document.getElementById('pad'); if (!pad) return;
-    var row = document.createElement('div'), defs = [['k1', 'Place'], ['k2', 'Jump'], ['k3', 'Next'], ['k4', 'Look']];
+    var row = document.createElement('div'), defs = [['k1', 'Place'], ['k2', 'Jump'], ['k3', 'Next'], ['k4', 'Look'], ['view', 'Cam']];
     function wire(b, k) {
       function dn(e) { e.preventDefault(); TV.fire('down', k, false); }
       function up(e) { e.preventDefault(); TV.fire('up', k, false); }
@@ -336,11 +338,14 @@ var TV = (function () {
     avg += (dt - avg) * 0.05;
     if (msgT > 0) msgT -= dt;
     if (state !== PLAY) return;
-    move(dt);
+    move(dt); updateMobs(dt);
+    if (!said) { said = true; say('Your friend Pip walks with you. Sheep roam the grass.'); }
+    var spd = Math.sqrt(vx * vx + vz * vz), fwd = vx * Math.sin(yaw) - vz * Math.cos(yaw);
+    if (onGround && spd > 0.3) { walkPh += dt * spd * 2.1 * (fwd < 0 ? -1 : 1); swing += (Math.min(1, spd / 3.2) - swing) * Math.min(1, dt * 10); } else swing += (0 - swing) * Math.min(1, dt * 8);
     if (TV.held.k2 && onGround) jump();
     if (TV.held.ok) { mineT -= dt; if (mineT <= 0) { target(); mine(); mineT = 0.28; } }
     /* keep the frame rate smooth by drawing fewer blocks on slow screens */
-    if (avg > 0.024 && R > 6) R -= 0.02; else if (avg < 0.0175 && R < 11) R += 0.01;
+    if (avg > 0.024 && R > 6) R -= 0.02; else if (avg < 0.0175 && R < RMAX) R += 0.01;
   }
 
   /* ------------------------------------------------------------ rendering */
@@ -353,7 +358,7 @@ var TV = (function () {
     [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]]
   ];
   var ND = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-  var MAXF = 3600, pool = [], order = [], nf = 0;
+  var MAXF = 6800, pool = [], order = [], nf = 0;
   for (i = 0; i < MAXF; i++) pool.push({ d: 0, n: 0, x: [0, 0, 0, 0, 0, 0, 0], y: [0, 0, 0, 0, 0, 0, 0], col: '', a: 1 });
   var cy_ = 0, sY = 0, cY = 1, sP = 0, cP = 1, ex = 0, ey = 0, ez = 0;
   var vx_ = [0, 0, 0, 0], vy_ = [0, 0, 0, 0], vz_ = [0, 0, 0, 0];
@@ -375,25 +380,154 @@ var TV = (function () {
       tx(bx + cc[0], by + yy, bz + cc[2], tmp, k);
       inX[k] = tmp[0]; inY[k] = tmp[1]; inZ[k] = tmp[2];
     }
-    var f = pool[nf], outc = 0;
+    clipEmit(color, bright, alpha, cd);
+  }
+  function clipEmit(color, bright, alpha, cd) {
+    if (nf >= MAXF) return;
+    var k, f = pool[nf], outc = 0, NEAR = 0.08;
     for (k = 0; k < 4; k++) {
       var k2 = (k + 1) & 3, za = inZ[k], zb = inZ[k2];
-      if (za >= NEAR) { f.x[outc] = W / 2 + inX[k] / za * F; f.y[outc] = H / 2 - inY[k] / za * F; outc++; }
+      if (za >= NEAR) { f.x[outc] = W / 2 + inX[k] / za * F; f.y[outc] = HC - inY[k] / za * F; outc++; }
       if ((za >= NEAR) !== (zb >= NEAR)) {
         var u = (NEAR - za) / (zb - za), qx = inX[k] + (inX[k2] - inX[k]) * u, qy = inY[k] + (inY[k2] - inY[k]) * u;
-        f.x[outc] = W / 2 + qx / NEAR * F; f.y[outc] = H / 2 - qy / NEAR * F; outc++;
+        f.x[outc] = W / 2 + qx / NEAR * F; f.y[outc] = HC - qy / NEAR * F; outc++;
       }
     }
     if (outc < 3) return;
     f.n = outc; f.d = cd; f.a = alpha;
-    var fog = TV.clamp((Math.sqrt(cd) - (R - 3.2)) / 3.2, 0, 1), r = color[0] * bright, g = color[1] * bright, b = color[2] * bright;
+    var fog = TV.clamp((Math.sqrt(Math.max(0, cd)) - (R - 3.2)) / 3.2, 0, 1), r = color[0] * bright, g = color[1] * bright, b = color[2] * bright;
     r = Math.round(r + (SKY[0] - r) * fog); g = Math.round(g + (SKY[1] - g) * fog); b = Math.round(b + (SKY[2] - b) * fog);
     f.col = 'rgb(' + r + ',' + g + ',' + b + ')';
     order[nf++] = f;
   }
 
+
+  /* ------------------------------------------------------------ the explorer (an original blocky character) */
+  var SKIN = [240, 192, 138], CAP = [214, 64, 52], JACKET = [244, 178, 52], PANTS = [72, 96, 140], BOOT = [58, 42, 34], PACK = [62, 142, 65], FLAP = [232, 120, 40], DARK = [28, 36, 48], WOOD_ = [150, 108, 62], METAL = [170, 176, 186], BELT = [96, 62, 36];
+  var CORN = [[-1, -1, -1], [1, -1, -1], [-1, 1, -1], [1, 1, -1], [-1, -1, 1], [1, -1, 1], [-1, 1, 1], [1, 1, 1]];
+  var CFACE = [[1, 3, 7, 5, 1, 0, 0], [0, 4, 6, 2, -1, 0, 0], [2, 3, 7, 6, 0, 1, 0], [0, 1, 5, 4, 0, -1, 0], [4, 5, 7, 6, 0, 0, 1], [0, 1, 3, 2, 0, 0, -1]];
+  var cw = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  /* a box in the character's own frame (x right, y up, z forward, feet at 0); rot swings it about the pivot height piy / depth piz */
+  var gX = 0, gY = 0, gZ = 0, gC = 1, gS = 0;   /* position and heading of the figure being drawn */
+  function cbox(ox, oy, oz, sx, sy, sz, col, rot, piy, piz, bias) {
+    var i, k, cr = Math.cos(rot), sr = Math.sin(rot), lx, ly, lz, dy, dz, wcx = 0, wcy = 0, wcz = 0;
+    for (i = 0; i < 8; i++) {
+      lx = ox + CORN[i][0] * sx / 2; ly = oy + CORN[i][1] * sy / 2; lz = oz + CORN[i][2] * sz / 2;
+      if (rot) { dy = ly - piy; dz = lz - piz; ly = piy + dy * cr + dz * sr; lz = piz + dz * cr - dy * sr; }
+      cw[i][0] = gX + lx * gC + lz * gS; cw[i][1] = gY + ly; cw[i][2] = gZ + lx * gS - lz * gC;
+    }
+    for (i = 0; i < 6; i++) {
+      var F6 = CFACE[i], nx = F6[4], ny = F6[5], nz = F6[6], rn, wnx, wny, wnz, fx_ = 0, fy_ = 0, fz_ = 0, dd, br;
+      if (rot) { rn = ny * cr + nz * sr; nz = nz * cr - ny * sr; ny = rn; }
+      wnx = nx * gC + nz * gS; wny = ny; wnz = nx * gS - nz * gC;
+      for (k = 0; k < 4; k++) { fx_ += cw[F6[k]][0] / 4; fy_ += cw[F6[k]][1] / 4; fz_ += cw[F6[k]][2] / 4; }
+      if ((ex - fx_) * wnx + (ey - fy_) * wny + (ez - fz_) * wnz <= 0) continue;
+      dd = (fx_ - ex) * (fx_ - ex) + (fy_ - ey) * (fy_ - ey) + (fz_ - ez) * (fz_ - ez) - 1.2 - (bias || 0);
+      br = 0.58 + 0.42 * Math.max(0, wnx * 0.35 + wny * 0.8 + wnz * 0.3);
+      for (k = 0; k < 4; k++) { tx(cw[F6[k]][0], cw[F6[k]][1], cw[F6[k]][2], tmp, k); inX[k] = tmp[0]; inY[k] = tmp[1]; inZ[k] = tmp[2]; }
+      clipEmit(col, br, 1, dd);
+    }
+  }
+  var P_HERO = { skin: SKIN, top: JACKET, pants: PANTS, boot: BOOT, belt: BELT, pack: PACK, flap: FLAP, cap: CAP, brim: true, metal: METAL };
+  var P_PAL = { skin: [176, 120, 84], top: [236, 98, 150], pants: [44, 92, 70], boot: [40, 30, 30], belt: [70, 44, 40], pack: null, flap: null, cap: [34, 26, 30], brim: false, tail: true, metal: [90, 210, 220] };
+  var WOOL = [242, 242, 236], SHEEPHEAD = [214, 190, 168], SLEG = [196, 172, 150];
+  function shadow(x, y, z, r, strong) {
+    var gy = Math.floor(y), i, sq = [[-r, -r], [r, -r], [r, r], [-r, r]];
+    for (; gy > 0 && !solid(get(Math.floor(x), gy - 1, Math.floor(z))); gy--);
+    if (y - gy < 6) {
+      for (i = 0; i < 4; i++) { tx(x + sq[i][0], gy + 0.02, z + sq[i][1], tmp, i); inX[i] = tmp[0]; inY[i] = tmp[1]; inZ[i] = tmp[2]; }
+      clipEmit([0, 0, 0], 1, 0.28, Math.max(0, (x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez) - 6));
+    }
+  }
+  /* a blocky person: pl = { x, y, z, yaw, ph, sw, og, mine }, pal = colours */
+  function drawPerson(pl, pal) {
+    var sw = Math.sin(pl.ph) * 0.8 * pl.sw, air = pl.og ? 0 : 1, arm = sw, armL = -sw, legL = sw, legR = -sw, side;
+    gX = pl.x; gY = pl.y; gZ = pl.z; gC = Math.cos(pl.yaw); gS = Math.sin(pl.yaw);
+    if (air) { legL = 0.5; legR = -0.35; armL = 0.9; arm = 0.9; }
+    if (pl.mine) arm = 0.9 + Math.sin(t * 14) * 0.7;
+    shadow(pl.x, pl.y, pl.z, 0.4);
+    /* legs and boots */
+    cbox(-0.115, 0.34, 0, 0.22, 0.68, 0.24, pal.pants, legL, 0.68, 0); cbox(-0.115, 0.07, 0.02, 0.235, 0.14, 0.3, pal.boot, legL, 0.68, 0);
+    cbox(0.115, 0.34, 0, 0.22, 0.68, 0.24, pal.pants, legR, 0.68, 0); cbox(0.115, 0.07, 0.02, 0.235, 0.14, 0.3, pal.boot, legR, 0.68, 0);
+    /* body, belt, backpack */
+    cbox(0, 1.02, 0, 0.5, 0.68, 0.3, pal.top, 0, 0, 0); cbox(0, 0.74, 0, 0.52, 0.07, 0.32, pal.belt, 0, 0, 0, 0.2);
+    if (pal.pack) { cbox(0, 1.06, -0.22, 0.36, 0.46, 0.16, pal.pack, 0, 0, 0); cbox(0, 1.27, -0.22, 0.38, 0.1, 0.18, pal.flap, 0, 0, 0, 0.2); }
+    /* arms (left, then right with the tool) */
+    cbox(-0.36, 1.02, 0, 0.2, 0.64, 0.2, pal.top, armL, 1.34, 0); cbox(-0.36, 0.78, 0, 0.21, 0.17, 0.21, pal.skin, armL, 1.34, 0, 0.2);
+    cbox(0.36, 1.02, 0, 0.2, 0.64, 0.2, pal.top, arm, 1.34, 0); cbox(0.36, 0.78, 0, 0.21, 0.17, 0.21, pal.skin, arm, 1.34, 0, 0.2);
+    cbox(0.36, 0.78, 0.26, 0.05, 0.05, 0.56, WOOD_, arm, 1.34, 0, 0.4); cbox(0.36, 0.78, 0.52, 0.34, 0.07, 0.07, pal.metal, arm, 1.34, 0, 0.4);
+    /* head: skin, cap or hair, eyes and smile */
+    cbox(0, 1.59, 0, 0.46, 0.46, 0.46, pal.skin, 0, 0, 0); cbox(0, 1.8, 0, 0.5, 0.16, 0.5, pal.cap, 0, 0, 0, 0.2);
+    if (pal.brim) cbox(0, 1.73, 0.3, 0.46, 0.04, 0.24, pal.cap, 0, 0, 0, 0.2);
+    else cbox(0, 1.62, -0.24, 0.5, 0.4, 0.06, pal.cap, 0, 0, 0, 0.2);
+    if (pal.tail) { cbox(0, 1.5, -0.34, 0.14, 0.42, 0.12, pal.cap, Math.sin(pl.ph * 0.5) * 0.15, 1.7, -0.3, 0.2); }
+    for (side = -1; side <= 1; side += 2) cbox(side * 0.1, 1.6, 0.235, 0.07, 0.1, 0.02, DARK, 0, 0, 0, 0.6);
+    cbox(0, 1.47, 0.235, 0.15, 0.03, 0.02, [150, 64, 52], 0, 0, 0, 0.6);
+  }
+  function drawSheep(m) {
+    var sw = Math.sin(m.ph) * 0.7 * m.sw;
+    gX = m.x; gY = m.y; gZ = m.z; gC = Math.cos(m.yaw); gS = Math.sin(m.yaw);
+    shadow(m.x, m.y, m.z, 0.45);
+    cbox(-0.2, 0.2, 0.3, 0.14, 0.4, 0.14, SLEG, sw, 0.4, 0.3); cbox(0.2, 0.2, 0.3, 0.14, 0.4, 0.14, SLEG, -sw, 0.4, 0.3);
+    cbox(-0.2, 0.2, -0.3, 0.14, 0.4, 0.14, SLEG, -sw, 0.4, -0.3); cbox(0.2, 0.2, -0.3, 0.14, 0.4, 0.14, SLEG, sw, 0.4, -0.3);
+    cbox(0, 0.64, 0, 0.62, 0.56, 0.96, WOOL, 0, 0, 0);
+    cbox(0, 0.84, 0.6, 0.3, 0.3, 0.3, SHEEPHEAD, 0, 0, 0); cbox(0, 1.02, 0.56, 0.34, 0.1, 0.34, WOOL, 0, 0, 0, 0.2);
+    cbox(-0.08, 0.86, 0.755, 0.06, 0.06, 0.02, DARK, 0, 0, 0, 0.6); cbox(0.08, 0.86, 0.755, 0.06, 0.06, 0.02, DARK, 0, 0, 0, 0.6);
+  }
+  function addChar() { drawPerson({ x: px, y: py, z: pz, yaw: yaw, ph: walkPh, sw: swing, og: onGround, mine: TV.held.ok }, P_HERO); }
+
+  /* ---- the friend and the sheep ---- */
+  var friend = { x: 0, y: 0, z: 0, vy: 0, yaw: 0, ph: 0, sw: 0, og: false }, sheep = [], said = false;
+  function stepMob(m, dt, sp, canJump) {
+    var nx = m.x + Math.sin(m.yaw) * sp * dt, nz = m.z - Math.cos(m.yaw) * sp * dt, blocked = false, ny;
+    if (!hits(nx, m.y, m.z)) m.x = nx; else blocked = true;
+    if (!hits(m.x, m.y, nz)) m.z = nz; else blocked = true;
+    m.vy -= 24 * dt; if (m.vy < -30) m.vy = -30;
+    if (get(Math.floor(m.x), Math.floor(m.y + 0.6), Math.floor(m.z)) === WATER) m.vy = Math.max(m.vy, 2.2);
+    ny = m.y + m.vy * dt; m.og = false;
+    if (!hits(m.x, ny, m.z)) m.y = ny; else { if (m.vy < 0) m.og = true; m.vy = 0; }
+    m.x = TV.clamp(m.x, 0.5, NX - 0.5); m.z = TV.clamp(m.z, 0.5, NZ - 0.5);
+    if (blocked && canJump && m.og) { m.vy = 8.2; m.og = false; }
+    return blocked;
+  }
+  function placeMobs() {
+    var n = 0, a = 0, x, z, h;
+    friend.x = px + 1.6 * Math.cos(yaw); friend.z = pz + 1.6 * Math.sin(yaw); friend.y = py + 0.5; friend.vy = 0; friend.yaw = yaw;
+    sheep = [];
+    while (sheep.length < 6 && a < 400) {
+      a++; x = Math.floor(px + (hash2(a, 3) - 0.5) * 34); z = Math.floor(pz + (hash2(7, a) - 0.5) * 34);
+      if (x < 2 || z < 2 || x > NX - 3 || z > NZ - 3) continue;
+      h = terrain(x, z); if (h < SEA + 2 || get(x, h, z) !== GRASS || get(x, h + 1, z) !== AIR) continue;
+      if (Math.abs(x - px) + Math.abs(z - pz) < 5) continue;
+      sheep.push({ x: x + 0.5, y: h + 1.01, z: z + 0.5, vy: 0, yaw: hash2(a, 9) * 6.283, ph: 0, sw: 0, og: false, go: false, tm: hash2(a, 5) * 3 });
+    }
+  }
+  function turnTo(m, want, rate) { var d = want - m.yaw; while (d > Math.PI) d -= 6.283; while (d < -Math.PI) d += 6.283; m.yaw += TV.clamp(d, -rate, rate); }
+  function updateMobs(dt) {
+    var f = friend, tx_ = px + Math.cos(yaw) * 2.0 + Math.sin(yaw) * 1.4, tz_ = pz + Math.sin(yaw) * 2.0 - Math.cos(yaw) * 1.4, dx = tx_ - f.x, dz = tz_ - f.z, d = Math.sqrt(dx * dx + dz * dz), sp = 0, i, m, sq, sd;
+    if (Math.abs(px - f.x) + Math.abs(pz - f.z) > 30 || f.y < -4) { f.x = tx_; f.z = tz_; f.y = py + 0.3; f.vy = 0; d = 0; }
+    if (d > 0.9) { turnTo(f, Math.atan2(dx, -dz), 7 * dt); sp = Math.min(5.6, 1.5 + d * 1.6); }
+    else turnTo(f, yaw, 4 * dt);
+    stepMob(f, dt, sp, true);
+    f.ph += dt * sp * 2.1; f.sw += ((sp > 0.3 && f.og ? Math.min(1, sp / 3.2) : 0) - f.sw) * Math.min(1, dt * 8);
+    for (i = 0; i < sheep.length; i++) {
+      m = sheep[i]; m.tm -= dt;
+      if (m.tm <= 0) { m.go = Math.random() < 0.6; m.yaw = Math.random() * 6.283; m.tm = 1.5 + Math.random() * 3.5; }
+      if (get(Math.floor(m.x), Math.floor(m.y + 0.6), Math.floor(m.z)) === WATER) { m.yaw = Math.atan2(32 - m.x, m.z - 32); m.go = true; }
+      sd = m.go ? 0.9 : 0;
+      if (stepMob(m, dt, sd, false) && m.go) m.tm = 0;
+      m.ph += dt * sd * 5; m.sw += ((sd > 0 && m.og ? 1 : 0) - m.sw) * Math.min(1, dt * 8);
+    }
+  }
+  function drawMobs() {
+    var fx = sY * cP, fy = sP, fz = -cY * cP, i, m, vx2, vy2, vz2;
+    function seen(o) { vx2 = o.x - ex; vy2 = o.y + 0.8 - ey; vz2 = o.z - ez; return vx2 * vx2 + vy2 * vy2 + vz2 * vz2 < 484 && vx2 * fx + vy2 * fy + vz2 * fz > -2; }
+    if (seen(friend)) drawPerson(friend, P_PAL);
+    for (i = 0; i < sheep.length; i++) { m = sheep[i]; if (seen(m)) drawSheep(m); }
+  }
+
   function drawBlocks() {
-    var cp = Math.cos(pitch), fx = sY * cp, fy = sP, fz = -cY * cp, rr = Math.ceil(R), bx0 = Math.floor(ex), bz0 = Math.floor(ez), by0 = Math.floor(ey), r2 = R * R;
+    var cp = cP, fx = sY * cp, fy = sP, fz = -cY * cp, rr = Math.ceil(R), bx0 = Math.floor(ex), bz0 = Math.floor(ez), by0 = Math.floor(ey), r2 = R * R;
     var x, y, z, dd, tp, rgb, vx2, vy2, vz2;
     nf = 0;
     for (x = bx0 - rr; x <= bx0 + rr; x++) for (z = bz0 - rr; z <= bz0 + rr; z++) {
@@ -422,6 +556,8 @@ var TV = (function () {
         }
       }
     }
+    drawMobs();
+    if (third && camD > 1.0) addChar();
     order.length = nf;
     order.sort(function (a, b) { return b.d - a.d; });
     var f, n, k;
@@ -441,7 +577,7 @@ var TV = (function () {
   function line3(x0, y0, z0, x1, y1, z1) {
     tx(x0, y0, z0, ca); tx(x1, y1, z1, cb);
     if (ca[2] < 0.08 || cb[2] < 0.08) return;
-    c.moveTo(W / 2 + ca[0] / ca[2] * F, H / 2 - ca[1] / ca[2] * F); c.lineTo(W / 2 + cb[0] / cb[2] * F, H / 2 - cb[1] / cb[2] * F);
+    c.moveTo(W / 2 + ca[0] / ca[2] * F, HC - ca[1] / ca[2] * F); c.lineTo(W / 2 + cb[0] / cb[2] * F, HC - cb[1] / cb[2] * F);
   }
   function outline() {
     if (!hasT) return;
@@ -459,7 +595,7 @@ var TV = (function () {
     if (type === GLASS) { c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(x + 3, y + 3, s - 6, s - 6); }
   }
   function hud() {
-    var cx = W / 2, cyy = H / 2;
+    var cx = W / 2, cyy = HC;
     c.strokeStyle = 'rgba(255,255,255,0.9)'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx - 9, cyy); c.lineTo(cx + 9, cyy); c.moveTo(cx, cyy - 9); c.lineTo(cx, cyy + 9); c.stroke();
     var n = HOT.length, s = 44, gap = 6, x0 = (W - n * (s + gap)) / 2, y0 = H - 82, k;
     for (k = 0; k < n; k++) {
@@ -474,8 +610,16 @@ var TV = (function () {
   }
 
   function draw() {
-    sY = Math.sin(yaw); cY = Math.cos(yaw); sP = Math.sin(pitch); cP = Math.cos(pitch);
-    ex = px; ey = py + EYE; ez = pz;
+    po = third ? -0.2 : 0; sY = Math.sin(yaw); cY = Math.cos(yaw); sP = Math.sin(pitch + po); cP = Math.cos(pitch + po);
+    var hxp = px, hyp = py + EYE, hzp = pz, dv = eyeDir(), so, sd;
+    if (third) {
+      so = camS; if (solid(get(Math.floor(hxp + cY * so), Math.floor(hyp), Math.floor(hzp + sY * so)))) so = 0;
+      hxp += cY * so; hzp += sY * so; camD = 5.6; HC = H / 2 - 40;
+      for (sd = 0.3; sd <= 5.6; sd += 0.1) {
+        if (solid(get(Math.floor(hxp - dv[0] * sd), Math.floor(hyp - dv[1] * sd), Math.floor(hzp - dv[2] * sd)))) { camD = Math.max(0.2, sd - 0.3); break; }
+      }
+      ex = hxp - dv[0] * camD; ey = hyp - dv[1] * camD; ez = hzp - dv[2] * camD;
+    } else { camD = 0; HC = H / 2; ex = px; ey = py + EYE; ez = pz; }
     var g = c.createLinearGradient(0, 0, 0, H * 0.65); g.addColorStop(0, '#6fa8f0'); g.addColorStop(1, 'rgb(' + SKY[0] + ',' + SKY[1] + ',' + SKY[2] + ')');
     c.fillStyle = g; c.fillRect(0, 0, W, H);
     target();
@@ -483,11 +627,11 @@ var TV = (function () {
     outline();
     if (get(Math.floor(ex), Math.floor(ey), Math.floor(ez)) === WATER) { c.fillStyle = 'rgba(30,80,200,0.35)'; c.fillRect(0, 0, W, H); }
     if (state === PLAY) hud();
-    else if (state === TITLE) TV.panel('BLOCKCRAFT', ['Press OK to start', 'Up/Down walk, Left/Right turn', 'OK breaks a block, 1 places, 2 jumps', '3 changes block, 4 lets Up/Down look up and down'], '#5da83a');
+    else if (state === TITLE) TV.panel('BLOCKCRAFT', ['Press OK to start', 'Up/Down walk, Left/Right turn', 'OK breaks a block, 1 places, 2 jumps', '3 changes block, 4 lets Up/Down look up and down', 'V key (or Cam button): switch camera'], '#5da83a');
     else TV.panel('PAUSED', ['OK: continue', 'Back: return to the menu', 'Your building is saved on this device'], '#44b8ff');
   }
 
-  build(); applyEdits(); spawn();
+  build(); applyEdits(); spawn(); placeMobs();
   TV.loop(update, draw);
 })();
 </script>

@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>My Quiz</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Left\/Right: pick. OK: choose. 1: hint. 2: hear it again. 3: voice on\/off. Back: menu.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var PACKS = [{"id":"what-is-doing","name":"What is he doing?","kind":"qa","color":"#2fae4f","items":[{"q":"Sohan has a book. What is Sohan doing?","a":"Sohan is reading.","w":["Sohan is running.","Sohan is sleeping."],"h":"Look at the book."},{"q":"Mina is in the park. She is very fast. What is Mina doing?","a":"Mina is running.","w":["Mina is reading.","Mina is eating."],"h":""},{"q":"Ravi has a plate of rice. What is Ravi doing?","a":"Ravi is eating.","w":["Ravi is singing.","Ravi is jumping."],"h":""},{"q":"Anu has a song in her mouth. La la la! What is Anu doing?","a":"Anu is singing.","w":["Anu is sleeping.","Anu is eating."],"h":""},{"q":"Kabir is in his bed. His eyes are closed. What is Kabir doing?","a":"Kabir is sleeping.","w":["Kabir is singing.","Kabir is running."],"h":""},{"q":"Sara has a ball. She jumps up and down. What is Sara doing?","a":"Sara is jumping.","w":["Sara is reading.","Sara is sleeping."],"h":""}]},{"id":"opposites","name":"Opposites","kind":"opposite","color":"#e0457b","items":[{"q":"hot","a":"cold","w":[],"h":""},{"q":"big","a":"small","w":[],"h":""},{"q":"up","a":"down","w":[],"h":""},{"q":"day","a":"night","w":[],"h":""},{"q":"happy","a":"sad","w":[],"h":""},{"q":"fast","a":"slow","w":[],"h":""},{"q":"open","a":"close","w":[],"h":""},{"q":"tall","a":"short","w":[],"h":""},{"q":"old","a":"new","w":[],"h":""},{"q":"full","a":"empty","w":[],"h":""}]},{"id":"synonyms","name":"Same meaning","kind":"synonym","color":"#8a4fd6","items":[{"q":"big","a":"large","w":[],"h":""},{"q":"small","a":"little","w":[],"h":""},{"q":"happy","a":"glad","w":[],"h":""},{"q":"fast","a":"quick","w":[],"h":""},{"q":"begin","a":"start","w":[],"h":""},{"q":"shut","a":"close","w":[],"h":""},{"q":"smart","a":"clever","w":[],"h":""},{"q":"sick","a":"ill","w":[],"h":""}]}];
+  var c = TV.ctx, W = TV.W, H = TV.H;
+  var STY = ['tap', 'catch', 'door', 'balloon', 'tap', 'balloon', 'door', 'catch', 'tap', 'balloon'];
+  var STYLE_NAME = { tap: 'Tap the answer', catch: 'Catch the fruit', door: 'Open the right door', balloon: 'Pop the balloon' };
+  var FRUIT = ['#e53935', '#fb8c00', '#fdd835', '#8e44ad'], BALLOON = ['#ef5350', '#42a5f5', '#66bb6a', '#ffca28'];
+  var LONG = 8, QUOTE_L = '“', QUOTE_R = '”';
+
+  var mode = 'title', t = 0, pk = null, opI = 0, deck = [], qn = 0, first = 0, q = null, style = 'tap', choices = [], gone = [], missed = 0;
+  var misses = 0, hintOn = false, sel = 1, fallT = 0, fast = false, celebT = 0, goodIdx = -1, wrongT = 0, palX = 70, bx = 480, by = 420, parts = [], res = { stars: 0, first: 0, total: 0 };
+  var best = TV.store.get('qz_best', {}), stickers = TV.store.get('qz_stick', 0), voiceOn = TV.store.get('qz_voice', true);
+
+  function ri(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function shuffle(a) { for (var i = a.length - 1; i > 0; i--) { var j = ri(0, i), x = a[i]; a[i] = a[j]; a[j] = x; } return a; }
+  function low(s) { return String(s).toLowerCase(); }
+  function laneX(i, n) { return W / 2 + (i - (n - 1) / 2) * (n === 4 ? 215 : n === 3 ? 280 : 340); }
+
+  /* ------------------------------------------------------------ questions */
+  function prompt(p, it) {
+    if (p.kind === 'opposite') return 'What is the opposite of ' + QUOTE_L + it.q + QUOTE_R + '?';
+    if (p.kind === 'synonym') return 'Which word means the same as ' + QUOTE_L + it.q + QUOTE_R + '?';
+    return it.q;
+  }
+  function fullText(p, it) {
+    if (p.kind === 'opposite') return 'The opposite of ' + it.q + ' is ' + it.a + '.';
+    if (p.kind === 'synonym') return it.q + ' and ' + it.a + ' mean the same.';
+    return it.q.indexOf('___') >= 0 ? it.q.replace('___', it.a) : it.a;
+  }
+  /* wrong answers: the ones you typed, then answers from other questions (never one that is also right for this question) */
+  function makeChoices(p, it, n) {
+    var bad = {}, i, k, ws = [], pool = [], cand;
+    bad[low(it.a)] = 1;
+    for (i = 0; i < p.items.length; i++) if (low(p.items[i].q) === low(it.q)) bad[low(p.items[i].a)] = 1;
+    for (i = 0; i < it.w.length; i++) { cand = it.w[i]; if (cand && !bad[low(cand)]) { bad[low(cand)] = 1; ws.push(cand); } }
+    var others = shuffle(p.items.slice());
+    for (i = 0; i < others.length && ws.length < n - 1; i++) { cand = others[i].a; if (cand && !bad[low(cand)]) { bad[low(cand)] = 1; ws.push(cand); } }
+    return shuffle([it.a].concat(ws.slice(0, n - 1)));
+  }
+  function playable(p, it) { return makeChoices(p, it, 3).length >= 2; }
+
+  /* ------------------------------------------------------------ flow */
+  function say(s) {
+    try {
+      if (!voiceOn || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+      window.speechSynthesis.cancel(); var u = new window.SpeechSynthesisUtterance(s); u.rate = 0.85; u.lang = 'en-IN'; window.speechSynthesis.speak(u);
+    } catch (e) { /* no speech */ }
+  }
+  function sayQ() { if (q) say(q.prompt.replace('___', 'blank')); }
+  function startRound(i) {
+    var p = PACKS[i], items = [], k;
+    for (k = 0; k < p.items.length; k++) if (playable(p, p.items[k])) items.push(p.items[k]);
+    if (items.length < 2) { TV.toast('This lesson needs more questions.', 2000); return; }
+    shuffle(items); deck = items.slice(0, 10); opI = i; pk = p; qn = 0; first = 0; missed = 0; mode = 'play'; q = null; newQ();
+  }
+  function newQ() {
+    var it = deck[qn], n, i, long_ = false;
+    style = STY[qn % 10]; n = style === 'balloon' ? 4 : 3;
+    choices = makeChoices(pk, it, n);
+    for (i = 0; i < choices.length; i++) if (choices[i].length > LONG) long_ = true;
+    if (long_ && (style === 'catch' || style === 'balloon')) { style = style === 'catch' ? 'tap' : 'door'; choices = makeChoices(pk, it, 3); }
+    q = { it: it, prompt: prompt(pk, it), full: fullText(pk, it), ans: it.a, retry: !!it.retry };
+    gone = []; misses = 0; hintOn = false; sel = Math.floor(choices.length / 2); fallT = 0; fast = false; celebT = 0; goodIdx = -1; wrongT = 0; palX = 70; bx = 480; by = 420; parts = [];
+    sayQ();
+  }
+  function finishRound() {
+    var tot = deck.length - missed, pct = tot ? first / tot : 0, s = pct >= 0.9 ? 3 : pct >= 0.7 ? 2 : 1;
+    if (s > (best[pk.id] || 0)) best[pk.id] = s; stickers++;
+    TV.store.set('qz_best', best); TV.store.set('qz_stick', stickers);
+    res = { stars: s, first: first, total: tot }; mode = 'result';
+    TV.beep(523, 0.12, 'triangle', 0.1); setTimeout(function () { TV.beep(659, 0.12, 'triangle', 0.1); }, 130); setTimeout(function () { TV.beep(784, 0.25, 'triangle', 0.1); }, 260);
+  }
+  function burst(x, y) {
+    var i, cols = ['#ffd21f', '#ff5a8a', '#4aa3ff', '#6ee06e', '#ffffff'];
+    for (i = 0; i < 46; i++) { var a = Math.random() * 6.283, sp = 120 + Math.random() * 320; parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 160, col: cols[i % 5], r: 3 + Math.random() * 4 }); }
+  }
+  function choose(i) {
+    if (celebT > 0 || gone[i]) return;
+    if (choices[i] === q.ans) {
+      if (misses === 0 && !q.retry) first++;
+      if (misses > 0 && !q.retry) { var again = { q: q.it.q, a: q.it.a, w: q.it.w, h: q.it.h, retry: true }; deck.push(again); missed++; }
+      goodIdx = i; celebT = 2.4; burst(style === 'balloon' ? bx : laneX(i, choices.length), style === 'balloon' ? by : 380);
+      TV.beep(523, 0.1, 'triangle', 0.11); setTimeout(function () { TV.beep(784, 0.18, 'triangle', 0.11); }, 100);
+      setTimeout(function () { say(q.full); }, 350);
+    } else {
+      gone[i] = true; misses++; wrongT = 0.9; fallT = 0; fast = false; TV.beep(200, 0.28, 'sawtooth', 0.09, 110);
+    }
+  }
+  function balloonPos(i) { var n = choices.length; return [W / 2 + (i - (n - 1) / 2) * 220, 390 + (i % 2) * 50 + Math.sin(t * 1.6 + i * 1.7) * 12]; }
+  function nearest() {
+    var bi = -1, bd = 70, i;
+    for (i = 0; i < choices.length; i++) { if (gone[i]) continue; var p = balloonPos(i), dx = p[0] - bx, dy = p[1] - by, d = Math.sqrt(dx * dx + dy * dy); if (d < bd) { bd = d; bi = i; } }
+    return bi;
+  }
+  function hintText() {
+    var it = q.it;
+    return it.h ? it.h : 'It starts with ' + QUOTE_L + it.a.charAt(0) + QUOTE_R;
+  }
+
+  TV.on(function (type, key, rep) {
+    if (type !== 'down') return;
+    if (key === 'back') { if (mode === 'play' || mode === 'result') { mode = 'menu'; } else if (mode === 'menu') { mode = 'title'; } else TV.exit(); return; }
+    if (key === 'k3') { voiceOn = !voiceOn; TV.store.set('qz_voice', voiceOn); TV.toast('Voice: ' + (voiceOn ? 'on' : 'off'), 1200); if (voiceOn) sayQ(); return; }
+    if (mode === 'title') { if (key === 'ok') mode = 'menu'; return; }
+    var N = PACKS.length;
+    if (mode === 'menu') {
+      if (!N) return;
+      if (key === 'left') { opI = (opI + N - 1) % N; TV.beep(440, 0.04, 'triangle', 0.07); } else if (key === 'right') { opI = (opI + 1) % N; TV.beep(440, 0.04, 'triangle', 0.07); } else if (key === 'ok') startRound(opI);
+      return;
+    }
+    if (mode === 'result') { if (key === 'ok') startRound(opI); return; }
+    if (celebT > 0) return;
+    if (key === 'k1') { hintOn = true; return; }
+    if (key === 'k2') { sayQ(); return; }
+    if (style === 'balloon') { if (key === 'ok') { var n = nearest(); if (n >= 0) choose(n); } return; }
+    if (key === 'left') { sel = Math.max(0, sel - 1); TV.beep(440, 0.04, 'triangle', 0.07); }
+    else if (key === 'right') { sel = Math.min(choices.length - 1, sel + 1); TV.beep(440, 0.04, 'triangle', 0.07); }
+    else if (key === 'ok') { if (style === 'catch') fast = true; else choose(sel); }
+  });
+  (function () {     /* on-screen buttons for touch screens */
+    var pad = document.getElementById('pad'); if (!pad) return;
+    var row = document.createElement('div'), defs = [['k1', 'Hint'], ['k2', 'Hear'], ['k3', 'Voice']];
+    function wire(b, k) {
+      function dn(e) { e.preventDefault(); TV.fire('down', k, false); }
+      function up(e) { e.preventDefault(); TV.fire('up', k, false); }
+      b.addEventListener('touchstart', dn, false); b.addEventListener('touchend', up, false); b.addEventListener('mousedown', dn, false); b.addEventListener('mouseup', up, false);
+    }
+    for (var d = 0; d < defs.length; d++) { var b = document.createElement('span'); b.className = 'pb'; b.style.fontSize = '12px'; b.appendChild(document.createTextNode(defs[d][1])); wire(b, defs[d][0]); row.appendChild(b); }
+    pad.appendChild(row);
+  })();
+
+  /* ------------------------------------------------------------ update */
+  function update(dt) {
+    t += dt; var i;
+    if (wrongT > 0) wrongT -= dt;
+    for (i = parts.length - 1; i >= 0; i--) { var p = parts[i]; p.vy += 600 * dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.y > H + 20) parts.splice(i, 1); }
+    if (mode !== 'play') return;
+    if (celebT > 0) {
+      celebT -= dt; if (style === 'door') palX += (laneX(goodIdx, choices.length) - 100 - palX) * Math.min(1, dt * 5);
+      if (celebT <= 0) { qn++; if (qn >= deck.length) finishRound(); else newQ(); }
+      return;
+    }
+    if (style === 'catch') {
+      fallT += dt * (fast ? 4 : 1);
+      if (fallT >= 6.5) { fast = false; fallT = 0; if (!gone[sel]) choose(sel); }
+    } else if (style === 'balloon') {
+      var sp = 340 * dt;
+      if (TV.held.left) bx -= sp; if (TV.held.right) bx += sp; if (TV.held.up) by -= sp; if (TV.held.down) by += sp;
+      bx = TV.clamp(bx, 30, W - 30); by = TV.clamp(by, 280, H - 20);
+    }
+  }
+
+  /* ------------------------------------------------------------ drawing */
+  function rr(x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r); c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h); c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r); c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath(); }
+  function star(x, y, r, col) {
+    c.fillStyle = col; c.beginPath();
+    for (var i = 0; i < 10; i++) { var a = -Math.PI / 2 + i * Math.PI / 5, rad = i % 2 ? r * 0.45 : r; c.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad); }
+    c.closePath(); c.fill(); c.strokeStyle = 'rgba(0,0,0,0.25)'; c.lineWidth = 2; c.stroke();
+  }
+  function pal(cx, cy, sc) {
+    c.save(); c.translate(cx, cy); c.scale(sc, sc);
+    c.fillStyle = 'rgba(0,0,0,0.2)'; c.beginPath(); c.ellipse(0, 28, 24, 7, 0, 0, 6.283); c.fill();
+    c.fillStyle = '#4aa3ff'; c.beginPath(); c.ellipse(0, 4, 26, 26, 0, 0, 6.283); c.fill();
+    c.beginPath(); c.moveTo(-22, -12); c.lineTo(-16, -34); c.lineTo(-6, -20); c.closePath(); c.fill(); c.beginPath(); c.moveTo(22, -12); c.lineTo(16, -34); c.lineTo(6, -20); c.closePath(); c.fill();
+    c.fillStyle = '#d7ecff'; c.beginPath(); c.ellipse(0, 12, 16, 12, 0, 0, 6.283); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(-9, -3, 7, 0, 6.283); c.arc(9, -3, 7, 0, 6.283); c.fill();
+    c.fillStyle = '#16214d'; c.beginPath(); c.arc(-6, -3, 3.5, 0, 6.283); c.arc(12, -3, 3.5, 0, 6.283); c.fill();
+    c.strokeStyle = '#16214d'; c.lineWidth = 2.5; c.beginPath(); c.arc(0, 9, 7, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke();
+    c.restore();
+  }
+  /* text that wraps and shrinks to fit a box */
+  function wrap(str, size, maxW) {
+    var words = String(str).split(' '), lines = [], cur = '', i, test;
+    c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif';
+    for (i = 0; i < words.length; i++) {
+      test = cur ? cur + ' ' + words[i] : words[i];
+      if (cur && c.measureText(test).width > maxW) { lines.push(cur); cur = words[i]; } else cur = test;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+  function widest(lines) { var m = 0, i; for (i = 0; i < lines.length; i++) m = Math.max(m, c.measureText(lines[i]).width); return m; }
+  function fitText(str, cx, cy, maxW, maxH, maxS, col) {
+    var s, lines, i, y0;
+    for (s = maxS; s >= 16; s -= 2) { lines = wrap(str, s, maxW); if (lines.length * s * 1.18 <= maxH && widest(lines) <= maxW) break; }
+    if (s < 16) s = 16;
+    c.font = 'bold ' + s + 'px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+    y0 = cy - (lines.length - 1) * s * 0.59;
+    for (i = 0; i < lines.length; i++) {
+      c.lineWidth = Math.max(3, s / 6); c.strokeStyle = 'rgba(0,0,0,0.45)'; c.strokeText(lines[i], cx, y0 + i * s * 1.18);
+      c.fillStyle = col || '#fff'; c.fillText(lines[i], cx, y0 + i * s * 1.18);
+    }
+  }
+  function glow(i) { return misses >= 3 && choices[i] === q.ans && Math.sin(t * 8) > 0; }
+
+  function drawTap() {
+    var n = choices.length, w0 = n === 4 ? 200 : n === 3 ? 250 : 320;
+    for (var i = 0; i < n; i++) {
+      var x = laneX(i, n) - w0 / 2, y = 268, w = w0, h = 190, f = sel === i, off = gone[i];
+      if (f) { x -= 8; y -= 8; w += 16; h += 16; }
+      c.globalAlpha = off ? 0.25 : 1; rr(x, y, w, h, 24); c.fillStyle = pk.color; c.fill();
+      c.fillStyle = 'rgba(255,255,255,0.2)'; rr(x + 6, y + 6, w - 12, h * 0.4, 18); c.fill();
+      if (f || glow(i)) { rr(x - 5, y - 5, w + 10, h + 10, 28); c.strokeStyle = glow(i) ? '#ffd21f' : '#fff'; c.lineWidth = 6; c.stroke(); }
+      fitText(choices[i], x + w / 2, y + h / 2, w - 28, h - 28, 62); c.globalAlpha = 1;
+    }
+  }
+  function drawDoor() {
+    var n = choices.length, dw = n === 4 ? 160 : 190;
+    c.fillStyle = '#6dbb5a'; c.fillRect(0, 484, W, 56);
+    for (var i = 0; i < n; i++) {
+      var x = laneX(i, n) - dw / 2, y = 262, w = dw, h = 225, f = sel === i, off = gone[i];
+      c.globalAlpha = off ? 0.25 : 1;
+      c.fillStyle = '#7b4a2b'; rr(x - 8, y - 8, w + 16, h + 8, 20); c.fill();
+      var open = celebT > 0 && goodIdx === i;
+      c.fillStyle = open ? '#fff3b0' : pk.color; rr(x, y, w, h, 16); c.fill();
+      if (!open) { c.fillStyle = 'rgba(255,255,255,0.2)'; rr(x + 8, y + 8, w - 16, 50, 12); c.fill(); c.fillStyle = '#ffd21f'; c.beginPath(); c.arc(x + w - 18, y + h * 0.6, 8, 0, 6.283); c.fill(); }
+      if (f || glow(i)) { rr(x - 12, y - 12, w + 24, h + 16, 24); c.strokeStyle = glow(i) ? '#ffd21f' : '#fff'; c.lineWidth = 6; c.stroke(); }
+      fitText(choices[i], x + w / 2 - 6, y + h / 2 - 4, w - 40, h - 70, 46); c.globalAlpha = 1;
+    }
+    pal(palX, 462, 0.9);
+  }
+  function drawCatch() {
+    var n = choices.length, fr = fallT / 6.5, y = 290 + fr * 160, i;
+    c.fillStyle = '#6dbb5a'; c.fillRect(0, 506, W, 34);
+    for (i = 0; i < n; i++) {
+      var x = laneX(i, n);
+      c.fillStyle = 'rgba(255,255,255,0.18)'; c.fillRect(x - 100, 240, 200, 266);
+      if (!gone[i] && !(celebT > 0 && goodIdx !== i)) {
+        var yy = (celebT > 0 && goodIdx === i) ? 455 : y;
+        c.fillStyle = FRUIT[i]; c.beginPath(); c.arc(x, yy, 52, 0, 6.283); c.fill();
+        c.fillStyle = '#3a8a2b'; c.beginPath(); c.ellipse(x + 8, yy - 54, 14, 7, -0.5, 0, 6.283); c.fill();
+        if (glow(i)) { c.strokeStyle = '#ffd21f'; c.lineWidth = 6; c.beginPath(); c.arc(x, yy, 60, 0, 6.283); c.stroke(); }
+        fitText(choices[i], x, yy + 2, 88, 50, 34);
+      }
+    }
+    var bxx = laneX(sel, n);
+    c.fillStyle = '#b7793a'; c.beginPath(); c.moveTo(bxx - 70, 474); c.lineTo(bxx + 70, 474); c.lineTo(bxx + 52, 522); c.lineTo(bxx - 52, 522); c.closePath(); c.fill();
+    c.fillStyle = '#d99a52'; c.fillRect(bxx - 74, 468, 148, 10);
+  }
+  function drawBalloons() {
+    for (var i = 0; i < choices.length; i++) {
+      if (gone[i] || (celebT > 0 && goodIdx === i)) continue;
+      var p = balloonPos(i);
+      c.strokeStyle = 'rgba(40,50,90,0.6)'; c.lineWidth = 2; c.beginPath(); c.moveTo(p[0], p[1] + 62); c.quadraticCurveTo(p[0] + 10 * Math.sin(t * 2 + i), p[1] + 100, p[0], p[1] + 125); c.stroke();
+      c.fillStyle = BALLOON[i]; c.beginPath(); c.ellipse(p[0], p[1], 64, 68, 0, 0, 6.283); c.fill();
+      c.fillStyle = 'rgba(255,255,255,0.3)'; c.beginPath(); c.ellipse(p[0] - 22, p[1] - 28, 12, 20, -0.5, 0, 6.283); c.fill();
+      c.fillStyle = BALLOON[i]; c.beginPath(); c.moveTo(p[0], p[1] + 66); c.lineTo(p[0] - 8, p[1] + 78); c.lineTo(p[0] + 8, p[1] + 78); c.closePath(); c.fill();
+      if (glow(i)) { c.strokeStyle = '#fff'; c.lineWidth = 6; c.beginPath(); c.ellipse(p[0], p[1], 72, 76, 0, 0, 6.283); c.stroke(); }
+      fitText(choices[i], p[0], p[1] + 2, 100, 60, 40);
+    }
+    if (celebT <= 0) {
+      var n = nearest(); c.strokeStyle = n >= 0 ? '#ffd21f' : '#ffffff'; c.lineWidth = 5; c.beginPath(); c.arc(bx, by, 26 + (n >= 0 ? 4 : 0), 0, 6.283); c.stroke();
+      c.beginPath(); c.moveTo(bx - 38, by); c.lineTo(bx - 14, by); c.moveTo(bx + 14, by); c.lineTo(bx + 38, by); c.moveTo(bx, by - 38); c.lineTo(bx, by - 14); c.moveTo(bx, by + 14); c.lineTo(bx, by + 38); c.stroke();
+    }
+  }
+
+  function drawMenu() {
+    var N = PACKS.length, i, k, vis = Math.min(5, N), start = TV.clamp(opI - 2, 0, Math.max(0, N - vis));
+    fitText('PICK A LESSON', W / 2, 54, 700, 60, 46);
+    for (i = 0; i < vis; i++) {
+      var idx = start + i, p = PACKS[idx], x = 40 + i * 182, y = 110, w = 170, h = 300, f = opI === idx;
+      if (f) { x -= 8; y -= 10; w += 16; h += 20; }
+      rr(x, y, w, h, 24); c.fillStyle = p.color; c.fill(); c.fillStyle = 'rgba(255,255,255,0.2)'; rr(x + 6, y + 6, w - 12, 150, 18); c.fill();
+      if (f) { rr(x - 5, y - 5, w + 10, h + 10, 28); c.strokeStyle = '#fff'; c.lineWidth = 6; c.stroke(); }
+      fitText(p.name, x + w / 2, y + 80, w - 24, 130, 40);
+      fitText(p.items.length + ' questions', x + w / 2, y + 200, w - 20, 30, 22);
+      for (k = 0; k < 3; k++) star(x + w / 2 - 34 + k * 34, y + 255, 12, k < (best[p.id] || 0) ? '#ffd21f' : 'rgba(255,255,255,0.35)');
+    }
+    if (start > 0) fitText('◀', 18, 260, 30, 30, 26); if (start + vis < N) fitText('▶', W - 18, 260, 30, 30, 26);
+    fitText('Stickers: ' + stickers, 130, 478, 200, 30, 24);
+    for (var s = 0; s < Math.min(stickers, 14); s++) star(290 + s * 36, 478, 14, ['#ffd21f', '#ff7eb6', '#6ee06e', '#4aa3ff', '#ff9a5c'][s % 5]);
+  }
+
+  function draw() {
+    var g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#5aa9ff'); g.addColorStop(1, '#cfeaff'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    var i;
+    if (mode === 'title') {
+      pal(W / 2, 150 + Math.sin(t * 3) * 6, 2.2);
+      if (!PACKS.length) TV.panel('MY QUIZ', ['No lessons yet', 'Add questions in quizadmin.php, then come back', 'Back: menu'], '#ffd21f');
+      else TV.panel('MY QUIZ', ['Questions and answers made by you', 'Pick the right answer with the arrow keys', 'Press OK to start'], '#ffd21f');
+      return;
+    }
+    if (mode === 'menu') { if (!PACKS.length) { TV.panel('NO LESSONS', ['Add questions in quizadmin.php', 'Back: return'], '#ffd21f'); } else drawMenu(); return; }
+    c.fillStyle = pk.color; c.beginPath(); c.arc(46, 40, 30, 0, 6.283); c.fill(); fitText(pk.name.charAt(0).toUpperCase(), 46, 41, 40, 40, 32);
+    c.fillStyle = 'rgba(255,255,255,0.4)'; rr(650, 28, 260, 16, 8); c.fill(); c.fillStyle = '#ffd21f'; rr(650, 28, Math.max(16, 260 * (qn / Math.max(1, deck.length))), 16, 8); c.fill();
+    c.font = 'bold 18px Arial, Helvetica, sans-serif'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#fff'; c.fillText(pk.name + (mode === 'play' ? '  •  ' + STYLE_NAME[style] : ''), 90, 40);
+    if (mode === 'play') {
+      var txt = celebT > 0 ? q.full : q.prompt;
+      fitText(txt, W / 2, 124, 880, 118, 56, celebT > 0 ? '#c9ffb0' : '#fff');
+      if (hintOn || misses >= 2) { rr(120, 202, 720, 34, 17); c.fillStyle = 'rgba(255,255,255,0.85)'; c.fill(); c.font = 'bold 20px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#23304f'; c.fillText('Hint: ' + hintText(), W / 2, 220); }
+      if (style === 'tap') drawTap(); else if (style === 'door') drawDoor(); else if (style === 'catch') drawCatch(); else drawBalloons();
+      if (style === 'catch') fitText('Left / Right: move the basket.  OK: drop it faster', W / 2, 530, 700, 24, 18);
+      else if (style === 'balloon') fitText('Arrows: move.  OK: pop', W / 2, 530, 700, 24, 18);
+      if (wrongT > 0) fitText('Try again!', W / 2, 252, 300, 40, 34, '#ffe08a');
+    }
+    if (mode === 'result') {
+      TV.panel(res.stars === 3 ? 'AMAZING!' : res.stars === 2 ? 'WELL DONE!' : 'GOOD TRY!', [res.first + ' of ' + res.total + ' right on the first try', missed ? 'The ones you missed came back, and you got them' : 'No question needed a second go', 'You earned a sticker. OK: play again   Back: menu'], pk.color);
+      for (i = 0; i < 3; i++) star(W / 2 - 60 + i * 60, 118, 24, i < res.stars ? '#ffd21f' : 'rgba(255,255,255,0.3)');
+    }
+    for (i = 0; i < parts.length; i++) { c.fillStyle = parts[i].col; c.fillRect(parts[i].x, parts[i].y, parts[i].r, parts[i].r * 1.5); }
+  }
+
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Brick Builder</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Arrows: move. OK: place. 1: turn. 2: colour. 3: shape. 4: view. P: undo. Back: menu.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+var TV3D = (function () {
+  var T = {}, ctx = TV.ctx, W = TV.W, H = TV.H, faces = [], cam = null, light = [-0.35, 0.8, 0.45], amb = 0.5, fogCol = [150, 180, 220], fogS = 80, fogE = 400;
+  var colCache = {};
+  function parse(c) {
+    if (typeof c !== 'string') return c;
+    if (colCache[c]) return colCache[c];
+    var v = [parseInt(c.substr(1, 2), 16), parseInt(c.substr(3, 2), 16), parseInt(c.substr(5, 2), 16)];
+    colCache[c] = v; return v;
+  }
+  T.parse = parse;
+  (function () { var m = Math.sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]); light = [light[0] / m, light[1] / m, light[2] / m]; })();
+  function norm3(v) { var m = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+
+  /* ---- unit shapes: arrays of faces; each face = array of [x,y,z], wound so the outside is counter-clockwise ---- */
+  function fixWinding(shape) {
+    for (var i = 0; i < shape.length; i++) {
+      var f = shape[i], a = f[0], b = f[1], c = f[2];
+      var n = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      var cx = 0, cy = 0, cz = 0, k;
+      for (k = 0; k < f.length; k++) { cx += f[k][0]; cy += f[k][1]; cz += f[k][2]; }
+      cx /= f.length; cy = cy / f.length - 0.05; cz /= f.length;     // shapes are centred on the origin
+      if (n[0] * cx + n[1] * cy + n[2] * cz < 0) f.reverse();
+    }
+    return shape;
+  }
+  var h = 0.5;
+  var CUBE = fixWinding([
+    [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]], [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]],
+    [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]], [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]],
+    [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]], [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  var PYR = fixWinding([
+    [[-h, -h, -h], [h, -h, -h], [0, h, 0]], [[h, -h, -h], [h, -h, h], [0, h, 0]], [[h, -h, h], [-h, -h, h], [0, h, 0]], [[-h, -h, h], [-h, -h, -h], [0, h, 0]],
+    [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  function prism(axis, sides) {
+    var out = [], ring = [], i;
+    for (i = 0; i < sides; i++) { var a = Math.PI * 2 * i / sides; ring.push([Math.cos(a) * h, Math.sin(a) * h]); }
+    function pt(p, along) { return axis === 0 ? [along, p[0], p[1]] : axis === 1 ? [p[0], along, p[1]] : [p[0], p[1], along]; }
+    for (i = 0; i < sides; i++) { var p0 = ring[i], p1 = ring[(i + 1) % sides]; out.push([pt(p0, -h), pt(p1, -h), pt(p1, h), pt(p0, h)]); }
+    var c0 = [], c1 = []; for (i = 0; i < sides; i++) { c0.push(pt(ring[i], -h)); c1.push(pt(ring[i], h)); }
+    out.push(c0, c1); return fixWinding(out);
+  }
+  T.CUBE = CUBE; T.PYR = PYR; T.PX = prism(0, 8); T.PY = prism(1, 8); T.PZ = prism(2, 8);
+
+  /* ---- camera ---- */
+  T.camera = function (pos, target, fovDeg) {
+    var f = norm3([target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]]);
+    var r = norm3(cross(f, [0, 1, 0])), u = cross(r, f);
+    cam = { p: pos, f: f, r: r, u: u, focal: (H / 2) / Math.tan(fovDeg * Math.PI / 360) };
+  };
+  T.target = function (g) { ctx = g || TV.ctx; };      // draw into another canvas context (null = the screen)
+  T.fog = function (col, s, e) { fogCol = parse(col); fogS = s; fogE = e; };
+  T.light = function (ambient) { amb = ambient; };
+  T.view = function (p) {       // world -> [x, y, depth] in camera space (before projection)
+    var vx = p[0] - cam.p[0], vy = p[1] - cam.p[1], vz = p[2] - cam.p[2];
+    return [vx * cam.r[0] + vy * cam.r[1] + vz * cam.r[2], vx * cam.u[0] + vy * cam.u[1] + vz * cam.u[2], vx * cam.f[0] + vy * cam.f[1] + vz * cam.f[2]];
+  };
+  /* world point -> screen [x, y, depth], or null when behind the camera */
+  T.project = function (p) {
+    var v = T.view(p); if (v[2] < 0.5) return null;
+    var k = cam.focal / v[2]; return [W / 2 + v[0] * k, H / 2 - v[1] * k, v[2]];
+  };
+  T.scale = function (z) { return cam.focal / z; };
+
+  function clipNear(pts) {           // Sutherland-Hodgman against z = near in view space
+    var out = [], n = pts.length, i, near = 0.6;
+    for (i = 0; i < n; i++) {
+      var a = pts[i], b = pts[(i + 1) % n], ina = a[2] >= near, inb = b[2] >= near;
+      if (ina) out.push(a);
+      if (ina !== inb) { var t = (near - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, near]); }
+    }
+    return out;
+  }
+  function paint(g, pts, css) {      // pts in view space
+    var q = clipNear(pts); if (q.length < 3) return;
+    g.beginPath();
+    for (var i = 0; i < q.length; i++) {
+      var k = cam.focal / q[i][2], x = W / 2 + q[i][0] * k, y = H / 2 - q[i][1] * k;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.closePath(); g.fillStyle = css; g.fill(); g.lineWidth = 0.7; g.strokeStyle = css; g.stroke();
+  }
+  function fogMix(col, d) {
+    var f = (d - fogS) / (fogE - fogS); f = f < 0 ? 0 : f > 1 ? 1 : f;
+    return 'rgb(' + Math.round(col[0] + (fogCol[0] - col[0]) * f) + ',' + Math.round(col[1] + (fogCol[1] - col[1]) * f) + ',' + Math.round(col[2] + (fogCol[2] - col[2]) * f) + ')';
+  }
+
+  /* ---- drawing a shape: queue its visible faces, flush() sorts and paints them ---- */
+  T.shape = function (shape, x, y, z, sx, sy, sz, color, emit, yaw) {
+    var col = parse(color), cs = 1, sn = 0, i, k;
+    if (yaw) { cs = Math.cos(yaw); sn = Math.sin(yaw); }
+    for (i = 0; i < shape.length; i++) {
+      var f = shape[i], vs = [], vw = [];
+      for (k = 0; k < f.length; k++) {
+        var px = f[k][0] * sx, py = f[k][1] * sy, pz = f[k][2] * sz;
+        var wx = x + px * cs + pz * sn, wz = z - px * sn + pz * cs, wy = y + py;
+        vw.push([wx, wy, wz]);
+      }
+      var a = vw[0], b = vw[1], c = vw[2];
+      var n = norm3(cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]));
+      var ccx = 0, ccy = 0, ccz = 0; for (k = 0; k < vw.length; k++) { ccx += vw[k][0]; ccy += vw[k][1]; ccz += vw[k][2]; }
+      ccx /= vw.length; ccy /= vw.length; ccz /= vw.length;
+      if (n[0] * (cam.p[0] - ccx) + n[1] * (cam.p[1] - ccy) + n[2] * (cam.p[2] - ccz) <= 0) continue;     // back face
+      var d = T.view([ccx, ccy, ccz]);
+      if (d[2] < 0.6 && d[2] > -200) { /* partly behind: still try, clipping handles it */ }
+      for (k = 0; k < vw.length; k++) vs.push(T.view(vw[k]));
+      var allBehind = true; for (k = 0; k < vs.length; k++) if (vs[k][2] >= 0.6) allBehind = false;
+      if (allBehind) continue;
+      var l = amb + (1 - amb) * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+      if (emit) l = l + (1 - l) * emit;
+      faces.push({ d: d[2], v: vs, c: [col[0] * l, col[1] * l, col[2] * l] });
+    }
+  };
+  T.box = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(CUBE, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.pyramid = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(PYR, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismY = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PY, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismX = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PX, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismZ = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PZ, x, y, z, sx, sy, sz, color, emit, yaw); };
+
+  T.flush = function () {
+    faces.sort(function (a, b) { return b.d - a.d; });
+    for (var i = 0; i < faces.length; i++) { var f = faces[i]; paint(ctx, f.v, fogMix(f.c, f.d)); }
+    faces.length = 0;
+  };
+  /* A flat quad on the ground (or any plane) painted immediately, before the sorted shapes. corners in world space. */
+  T.quad = function (a, b, c, d, color, g) {
+    var col = parse(color); var vs = [T.view(a), T.view(b), T.view(c), T.view(d)];
+    var cz = (vs[0][2] + vs[1][2] + vs[2][2] + vs[3][2]) / 4;
+    paint(g || ctx, vs, typeof color === 'string' && color.charAt(0) !== '#' ? color : fogMix([col[0], col[1], col[2]], cz));
+  };
+  T.shadow = function (x, z, sx, sz, y) {
+    var yy = y || 0.02, vs = [T.view([x - sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z + sz / 2 + 0.25]), T.view([x - sx / 2 + 0.3, yy, z + sz / 2 + 0.25])];
+    paint(ctx, vs, 'rgba(5,8,25,.35)');
+  };
+  T.sky = function (top, bottom, horizonY) {
+    var g = ctx.createLinearGradient(0, 0, 0, horizonY || H * 0.6); g.addColorStop(0, top); g.addColorStop(1, bottom);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  };
+  /* Draw static scenery once into an offscreen canvas and reuse it every frame (the camera must not move). */
+  var layer = null, layerKey = '';
+  T.cached = function (key, fn) {
+    if (!layer || layerKey !== key) {
+      layer = document.createElement('canvas'); layer.width = W; layer.height = H; layerKey = key;
+      var g = layer.getContext('2d'); fn(g);
+    }
+    ctx.drawImage(layer, 0, 0);
+  };
+  T.uncache = function () { layer = null; layerKey = ''; };
+  T.quadTo = function (g, a, b, c, d, color) { T.quad(a, b, c, d, color, g); };
+  T.ground = function (cx, cz, hw, hd, color) { T.quad([cx - hw, 0, cz + hd], [cx + hw, 0, cz + hd], [cx + hw, 0, cz - hd], [cx - hw, 0, cz - hd], color); };
+  T.cam = function () { return cam; };
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H, G = TV3D;
+  var N = 16, BH = 1.2, MAXB = 400, GAP = 0.03;
+  var COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#f4f4f4'], CNAME = ['Red', 'Orange', 'Yellow', 'Green', 'Blue', 'White'];
+  /* shapes: [width, depth, name, isRoof] */
+  var SHAPES = [[1, 1, '1 x 1'], [1, 2, '1 x 2'], [2, 2, '2 x 2'], [1, 4, '1 x 4'], [2, 4, '2 x 4'], [2, 2, 'Roof', true]];
+  var bricks = [], hm = [], top = [], i, j;
+  var cx = 7, cz = 7, shape = 2, rot = 0, col = 4, view = 0, state = 0, dirty = true, t = 0, msg = '', msgT = 0;
+  var off = document.createElement('canvas'); off.width = W; off.height = H; var offc = off.getContext('2d');
+
+  function reset2d() { hm = []; top = []; for (i = 0; i < N; i++) { hm.push([]); top.push([]); for (j = 0; j < N; j++) { hm[i].push(0); top[i].push(-1); } } }
+  function dims(s, r) { var sh = SHAPES[s]; return r ? [sh[1], sh[0]] : [sh[0], sh[1]]; }
+  function rebuildGrid() {
+    reset2d();
+    for (var b = 0; b < bricks.length; b++) {
+      var k = bricks[b], d = dims(k[0], k[3]), x, z;
+      for (x = k[1]; x < k[1] + d[0]; x++) for (z = k[2]; z < k[2] + d[1]; z++) { if (k[5] + 1 > hm[x][z]) hm[x][z] = k[5] + 1; top[x][z] = b; }
+    }
+  }
+  function layerAt(x, z, d) {
+    var m = 0, a, b;
+    for (a = x; a < x + d[0]; a++) for (b = z; b < z + d[1]; b++) if (hm[a][b] > m) m = hm[a][b];
+    return m;
+  }
+  function canPlace(x, z, d) {
+    if (bricks.length >= MAXB) return false;
+    var a, b, tb;
+    for (a = x; a < x + d[0]; a++) for (b = z; b < z + d[1]; b++) { tb = top[a][b]; if (tb >= 0 && SHAPES[bricks[tb][0]][3]) return false; }   // nothing sits on a roof
+    return true;
+  }
+  function save() { TV.store.set('bb_save', bricks); }
+  function load() {
+    var s = TV.store.get('bb_save', []);
+    bricks = [];
+    if (s instanceof Array) for (var k = 0; k < s.length && k < MAXB; k++) {
+      var b = s[k]; if (b instanceof Array && b.length === 6 && b[0] >= 0 && b[0] < SHAPES.length && b[1] >= 0 && b[2] >= 0 && b[1] < N && b[2] < N) bricks.push([b[0] | 0, b[1] | 0, b[2] | 0, b[3] ? 1 : 0, b[4] | 0, b[5] | 0]);
+    }
+    rebuildGrid(); dirty = true;
+  }
+  function add(s, x, z, r, cl, layer) { if (bricks.length >= MAXB) return; bricks.push([s, x, z, r ? 1 : 0, cl, layer]); }
+  function say(m) { msg = m; msgT = 1.6; }
+
+  /* a ready-made castle to look at, change or tear down */
+  function castle() {
+    bricks = []; var k, L, cl;
+    var corners = [[2, 2], [12, 2], [2, 12], [12, 12]], roofs = [4, 3, 0, 1];
+    for (k = 0; k < 4; k++) { for (L = 0; L < 7; L++) add(2, corners[k][0], corners[k][1], 0, [0, 2, 1, 4][(L + k) % 4], L); add(5, corners[k][0], corners[k][1], 0, roofs[k], 7); }
+    for (L = 0; L < 4; L++) {
+      cl = L % 2 ? 2 : 4;
+      add(3, 4, 2, 1, cl, L); add(3, 8, 2, 1, cl, L);                 // back wall (runs along x)
+      add(3, 2, 4, 0, cl, L); add(3, 2, 8, 0, cl, L);                 // left wall (runs along z)
+      add(3, 13, 4, 0, cl, L); add(3, 13, 8, 0, cl, L);               // right wall
+      if (L < 3) { add(1, 4, 13, 1, cl, L); add(1, 10, 13, 1, cl, L); }   // front wall with a gate in the middle
+      else { add(3, 4, 13, 1, cl, L); add(3, 8, 13, 1, cl, L); }
+    }
+    for (L = 0; L < 5; L++) { cl = [1, 2, 0, 4, 2][L]; add(4, 6, 5, 0, cl, L); add(4, 8, 5, 0, cl, L); }
+    for (L = 5; L < 8; L++) add(2, 7, 6, 0, L % 2 ? 2 : 0, L);
+    add(5, 7, 6, 0, 0, 8);
+    rebuildGrid(); dirty = true; save();
+  }
+
+  /* ---------------------------------------------------------------- input */
+  function move(dx, dz) {
+    var ang = view * Math.PI / 2, fx = Math.round(-Math.sin(ang)), fz = Math.round(-Math.cos(ang)), rx = Math.round(Math.cos(ang)), rz = Math.round(-Math.sin(ang));
+    cx += dx * rx + dz * fx; cz += dx * rz + dz * fz; clampCursor();
+  }
+  function clampCursor() { var d = dims(shape, rot); cx = TV.clamp(cx, 0, N - d[0]); cz = TV.clamp(cz, 0, N - d[1]); }
+  function place() {
+    var d = dims(shape, rot);
+    if (!canPlace(cx, cz, d)) { TV.beep(120, 0.12, 'square', 0.08); say(bricks.length >= MAXB ? 'The baseplate is full' : 'Nothing can sit on a roof'); return; }
+    bricks.push([shape, cx, cz, rot, col, layerAt(cx, cz, d)]); rebuildGrid(); dirty = true; save(); TV.beep(420, 0.06, 'square', 0.09, 120);
+  }
+  function undo() { if (!bricks.length) return; bricks.pop(); rebuildGrid(); dirty = true; save(); TV.beep(240, 0.07, 'triangle', 0.08); }
+  TV.on(function (type, key, rep) {
+    if (type !== 'down') return;
+    if (key === 'back') { TV.exit(); return; }
+    if (state === 0) { if (key === 'ok' || key === 'start') state = 1; else if (key === 'k1') { castle(); state = 1; } return; }
+    if (key === 'left') move(-1, 0); else if (key === 'right') move(1, 0); else if (key === 'up') move(0, 1); else if (key === 'down') move(0, -1);
+    else if (rep) return;
+    else if (key === 'ok') place();
+    else if (key === 'k1') { if (!SHAPES[shape][3]) { rot = rot ? 0 : 1; clampCursor(); } }
+    else if (key === 'k2') { col = (col + 1) % COLORS.length; say(CNAME[col]); }
+    else if (key === 'k3') { shape = (shape + 1) % SHAPES.length; rot = 0; clampCursor(); say(SHAPES[shape][2]); }
+    else if (key === 'k4') { view = (view + 1) % 4; dirty = true; }
+    else if (key === 'start') undo();
+  });
+  (function () {     /* on-screen buttons for touch screens */
+    var pad = document.getElementById('pad'); if (!pad) return;
+    var row = document.createElement('div'), defs = [['k1', 'Turn'], ['k2', 'Colour'], ['k3', 'Shape'], ['k4', 'View'], ['start', 'Undo']];
+    function wire(b, k) {
+      function dn(e) { e.preventDefault(); TV.fire('down', k, false); }
+      function up(e) { e.preventDefault(); TV.fire('up', k, false); }
+      b.addEventListener('touchstart', dn, false); b.addEventListener('touchend', up, false); b.addEventListener('mousedown', dn, false); b.addEventListener('mouseup', up, false);
+    }
+    for (var d = 0; d < defs.length; d++) { var b = document.createElement('span'); b.className = 'pb'; b.style.fontSize = '12px'; b.appendChild(document.createTextNode(defs[d][1])); wire(b, defs[d][0]); row.appendChild(b); }
+    pad.appendChild(row);
+  })();
+
+  /* ---------------------------------------------------------------- drawing */
+  function setCam() {
+    var a = view * Math.PI / 2 + 0.42;
+    G.camera([Math.sin(a) * 22, 18.5, Math.cos(a) * 22], [0, 3.4, 0], 46); G.fog('#ffffff', 120, 300); G.light(0.5);
+  }
+  function wx(i) { return i - N / 2; }
+  function renderBricks() {
+    offc.clearRect(0, 0, W, H);
+    G.target(offc); setCam();
+    var h = N / 2, g = offc, x, z, b, k;
+    G.quad([-h, 0, h], [h, 0, h], [h, 0, -h], [-h, 0, -h], '#3f9e46', g);
+    G.quad([-h, -0.5, h], [h, -0.5, h], [h, 0, h], [-h, 0, h], '#2c7a33', g); G.quad([h, -0.5, h], [h, -0.5, -h], [h, 0, -h], [h, 0, h], '#276f2e', g);
+    G.quad([-h, -0.5, -h], [-h, -0.5, h], [-h, 0, h], [-h, 0, -h], '#276f2e', g); G.quad([h, -0.5, -h], [-h, -0.5, -h], [-h, 0, -h], [h, 0, -h], '#2c7a33', g);
+    for (b = 0; b < bricks.length; b++) {
+      k = bricks[b]; var d = dims(k[0], k[3]), y0 = k[5] * BH, cl = COLORS[k[4]];
+      if (SHAPES[k[0]][3]) {
+        G.box(wx(k[1]) + 1, y0 + 0.25, wx(k[2]) + 1, 2 - GAP * 2, 0.5, 2 - GAP * 2, cl);
+        G.pyramid(wx(k[1]) + 1, y0 + 0.5 + 1.05, wx(k[2]) + 1, 1.9, 2.1, 1.9, cl);
+        continue;
+      }
+      for (x = k[1]; x < k[1] + d[0]; x++) for (z = k[2]; z < k[2] + d[1]; z++) {
+        G.box(wx(x) + 0.5, y0 + (BH - 0.03) / 2, wx(z) + 0.5, 1 - GAP * 2, BH - 0.03, 1 - GAP * 2, cl);
+        if (top[x][z] === b) G.prismY(wx(x) + 0.5, y0 + BH - 0.03 + 0.11, wx(z) + 0.5, 0.56, 0.22, 0.56, cl);
+      }
+    }
+    for (x = 0; x < N; x++) for (z = 0; z < N; z++) if (hm[x][z] === 0) G.prismY(wx(x) + 0.5, 0.11, wx(z) + 0.5, 0.56, 0.22, 0.56, '#4cae54');
+    G.flush(); G.target(null); dirty = false;
+  }
+  function drawGhost() {
+    var d = dims(shape, rot), ok = canPlace(cx, cz, d), L = layerAt(cx, cz, d), roof = SHAPES[shape][3], bob = Math.sin(t * 5) * 0.06;
+    var px = wx(cx) + d[0] / 2, pz = wx(cz) + d[1] / 2, py = L * BH + bob, color = ok ? COLORS[col] : '#ff3b30';
+    c.globalAlpha = 0.78;
+    if (roof) { G.box(px, py + 0.25, pz, 1.94, 0.5, 1.94, color, 0.3); G.pyramid(px, py + 1.55, pz, 1.9, 2.1, 1.9, color, 0.3); }
+    else G.box(px, py + BH / 2, pz, d[0] - 0.02, BH, d[1] - 0.02, color, 0.3);
+    G.flush(); c.globalAlpha = 1;
+    /* shadow-ish footprint on the surface */
+    var y = L * BH + 0.02; c.globalAlpha = 0.5;
+    G.quad([px - d[0] / 2, y, pz + d[1] / 2], [px + d[0] / 2, y, pz + d[1] / 2], [px + d[0] / 2, y, pz - d[1] / 2], [px - d[0] / 2, y, pz - d[1] / 2], ok ? '#ffffff' : '#ff3b30');
+    c.globalAlpha = 1;
+  }
+  function tallest() { var m = 0, a, b; for (a = 0; a < N; a++) for (b = 0; b < N; b++) if (hm[a][b] > m) m = hm[a][b]; return m; }
+
+  function update(dt) { t += dt; if (msgT > 0) msgT -= dt; }
+  function draw() {
+    if (dirty) renderBricks();
+    var g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#cfe0f4'); g.addColorStop(1, '#f7f9fc'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    setCam();
+    c.drawImage(off, 0, 0);
+    if (state === 1) drawGhost();
+    if (state === 1) {
+      TV.text('BRICKS ' + bricks.length + ' / ' + MAXB + '    HEIGHT ' + tallest(), 16, 24, 20, '#23304f', 'left');
+      var sh = SHAPES[shape], bx = W / 2 - 110, by = H - 96;
+      c.fillStyle = 'rgba(255,255,255,0.88)'; c.fillRect(bx, by, 220, 40);
+      c.fillStyle = COLORS[col]; c.fillRect(bx + 8, by + 8, 24, 24); c.strokeStyle = '#23304f'; c.lineWidth = 2; c.strokeRect(bx + 8, by + 8, 24, 24);
+      TV.text(sh[2] + '   ' + CNAME[col], bx + 44, by + 26, 20, '#23304f', 'left');
+      if (msgT > 0) TV.text(msg, W / 2, 70, 22, '#23304f', 'center');
+    } else TV.panel('BRICK BUILDER', ['Press OK to build', 'Press 1 to start with a castle', 'Arrows move, OK places a brick', '1 turn, 2 colour, 3 shape, 4 view, P undo'], '#1e88e5');
+  }
+
+  reset2d(); load();
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

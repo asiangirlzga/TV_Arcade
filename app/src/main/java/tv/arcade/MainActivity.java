@@ -157,9 +157,15 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Press Back again to exit", Toast.LENGTH_SHORT).show();
     }
 
-    @Override protected void onResume() { super.onResume(); if (web != null) { web.onResume(); web.resumeTimers(); } getWindow().getDecorView().setSystemUiVisibility(
+    private final Runnable tick = new Runnable() { public void run() {
+        String u = web == null ? null : web.getUrl();
+        if (u != null && isAsset(u) && u.endsWith("/index.html")) startSync(false);      // quietly look for updates while the menu is open
+        ui.postDelayed(this, 4 * 60 * 1000L);
+    } };
+
+    @Override protected void onResume() { super.onResume(); ui.removeCallbacks(tick); ui.postDelayed(tick, 4 * 60 * 1000L); if (web != null) { web.onResume(); web.resumeTimers(); } getWindow().getDecorView().setSystemUiVisibility(
             View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE); }
-    @Override protected void onPause() { if (web != null) { web.onPause(); web.pauseTimers(); } super.onPause(); }
+    @Override protected void onPause() { ui.removeCallbacks(tick); if (web != null) { web.onPause(); web.pauseTimers(); } super.onPause(); }
     @Override protected void onDestroy() {
         if (pad != null) pad.stop();
         if (syncWeb != null) { syncWeb.destroy(); syncWeb = null; }
@@ -196,10 +202,22 @@ public class MainActivity extends Activity {
         f.delete();
     }
 
+    /** slug -> version of each built-in game inside the APK (written by tools/prerender.sh). */
+    private JSONObject bundledVersions() {
+        try {
+            java.io.InputStream in = getAssets().open("www/versions.json");
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096]; int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            in.close();
+            return new JSONObject(new String(bo.toByteArray(), "UTF-8"));
+        } catch (Exception e) { return new JSONObject(); }
+    }
+
     private void startSync(boolean manual) {
         if (syncWeb != null) return;
         long now = System.currentTimeMillis();
-        if (!manual && now - lastSync < 10 * 60 * 1000L) return;
+        if (!manual && now - lastSync < 3 * 60 * 1000L) return;
         String base = online();
         if (base.length() == 0) { syncStatus = "No online address set"; return; }
         if (!base.endsWith("/")) base = base + "/";
@@ -242,7 +260,7 @@ public class MainActivity extends Activity {
     /** Runs on a background thread, called by the sync page. Only the hidden sync browser can reach it. */
     public class SyncBridge {
         @JavascriptInterface public String have() {
-            JSONObject o = new JSONObject();
+            JSONObject o = bundledVersions();           // games that came inside the APK count as already downloaded
             JSONArray a = readMeta();
             try {
                 for (int i = 0; i < a.length(); i++) {
@@ -279,24 +297,25 @@ public class MainActivity extends Activity {
                 try {
                     JSONArray list = new JSONArray(manifestJson), old = readMeta(), out = new JSONArray();
                     java.util.Set<String> keep = new java.util.HashSet<String>();
-                    int added = 0; String addedName = "";
+                    int added = 0, updated = 0; String addedName = "", updatedName = "";
                     long nowMs = System.currentTimeMillis();
                     for (int i = 0; i < list.length(); i++) {
                         JSONObject g = list.getJSONObject(i);
                         String slug = g.getString("slug");
                         if (!slugOk(slug)) continue;
                         File fresh = new File(getFilesDir(), "games_new/" + slug), dest = new File(gamesDir(), slug);
-                        long at = nowMs; boolean existed = false;
-                        for (int k = 0; k < old.length(); k++) if (old.getJSONObject(k).getString("slug").equals(slug)) { at = old.getJSONObject(k).optLong("at", nowMs); existed = true; }
+                        long at = nowMs; boolean existed = false; String oldVer = "";
+                        for (int k = 0; k < old.length(); k++) if (old.getJSONObject(k).getString("slug").equals(slug)) { at = old.getJSONObject(k).optLong("at", nowMs); existed = true; oldVer = old.getJSONObject(k).optString("ver", ""); }
                         if (fresh.isDirectory()) {
                             gamesDir().mkdirs();
                             deleteTree(dest);
                             if (!fresh.renameTo(dest)) continue;
                         } else if (!new File(dest, "index.html").exists()) continue;
                         if (!existed) { added++; addedName = g.optString("name", slug); }
+                        else if (!oldVer.equals(g.getString("ver"))) { updated++; updatedName = g.optString("name", slug); }
                         JSONObject m = new JSONObject();
                         m.put("slug", slug); m.put("name", g.optString("name", slug)); m.put("desc", g.optString("desc", ""));
-                        m.put("hint", g.optString("hint", "")); m.put("color", g.optString("color", "#8a7dff")); m.put("ver", g.getString("ver")); m.put("at", at);
+                        m.put("hint", g.optString("hint", "")); m.put("color", g.optString("color", "#8a7dff")); m.put("ver", g.getString("ver")); m.put("at", at); m.put("builtin", g.optBoolean("builtin", g.optInt("builtin", 0) == 1));
                         out.put(m); keep.add(slug);
                     }
                     File[] dirs = gamesDir().listFiles();                         // games removed or hidden online disappear here too
@@ -305,7 +324,9 @@ public class MainActivity extends Activity {
                     boolean changed = added > 0 || out.length() != old.length();
                     if (added == 1) Toast.makeText(MainActivity.this, "New game: " + addedName, Toast.LENGTH_LONG).show();
                     else if (added > 1) Toast.makeText(MainActivity.this, added + " new games added", Toast.LENGTH_LONG).show();
-                    endSync(out.length() + " online game" + (out.length() == 1 ? "" : "s") + " on this TV. Updated just now.", changed || added > 0);
+                    else if (updated == 1) Toast.makeText(MainActivity.this, "Updated: " + updatedName, Toast.LENGTH_LONG).show();
+                    else if (updated > 1) Toast.makeText(MainActivity.this, updated + " games updated", Toast.LENGTH_LONG).show();
+                    endSync(out.length() + " downloaded game" + (out.length() == 1 ? "" : "s") + " on this TV. Checked just now.", changed || added > 0 || updated > 0);
                 } catch (Exception e) { endSync("Update failed", false); }
             } });
         }
@@ -336,7 +357,7 @@ public class MainActivity extends Activity {
                     File f = new File(gamesDir(), g.getString("slug") + "/index.html");
                     if (!f.exists()) continue;
                     JSONObject o = new JSONObject();
-                    o.put("name", g.optString("name")); o.put("desc", g.optString("desc")); o.put("hint", g.optString("hint")); o.put("color", g.optString("color"));
+                    o.put("slug", g.getString("slug")); o.put("builtin", g.optBoolean("builtin", false)); o.put("name", g.optString("name")); o.put("desc", g.optString("desc")); o.put("hint", g.optString("hint")); o.put("color", g.optString("color"));
                     o.put("url", "file://" + f.getAbsolutePath()); o.put("at", g.optLong("at")); o.put("isNew", now - g.optLong("at") < 14L * 86400000L);
                     l.add(o);
                 }

@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Football 3D</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Arrows run. OK tap: pass. Hold OK: shoot. 1: sprint. 2: switch player. P: pause. Back: menu.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+var TV3D = (function () {
+  var T = {}, ctx = TV.ctx, W = TV.W, H = TV.H, faces = [], cam = null, light = [-0.35, 0.8, 0.45], amb = 0.5, fogCol = [150, 180, 220], fogS = 80, fogE = 400;
+  var colCache = {};
+  function parse(c) {
+    if (typeof c !== 'string') return c;
+    if (colCache[c]) return colCache[c];
+    var v = [parseInt(c.substr(1, 2), 16), parseInt(c.substr(3, 2), 16), parseInt(c.substr(5, 2), 16)];
+    colCache[c] = v; return v;
+  }
+  T.parse = parse;
+  (function () { var m = Math.sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]); light = [light[0] / m, light[1] / m, light[2] / m]; })();
+  function norm3(v) { var m = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+
+  /* ---- unit shapes: arrays of faces; each face = array of [x,y,z], wound so the outside is counter-clockwise ---- */
+  function fixWinding(shape) {
+    for (var i = 0; i < shape.length; i++) {
+      var f = shape[i], a = f[0], b = f[1], c = f[2];
+      var n = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      var cx = 0, cy = 0, cz = 0, k;
+      for (k = 0; k < f.length; k++) { cx += f[k][0]; cy += f[k][1]; cz += f[k][2]; }
+      cx /= f.length; cy = cy / f.length - 0.05; cz /= f.length;     // shapes are centred on the origin
+      if (n[0] * cx + n[1] * cy + n[2] * cz < 0) f.reverse();
+    }
+    return shape;
+  }
+  var h = 0.5;
+  var CUBE = fixWinding([
+    [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]], [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]],
+    [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]], [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]],
+    [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]], [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  var PYR = fixWinding([
+    [[-h, -h, -h], [h, -h, -h], [0, h, 0]], [[h, -h, -h], [h, -h, h], [0, h, 0]], [[h, -h, h], [-h, -h, h], [0, h, 0]], [[-h, -h, h], [-h, -h, -h], [0, h, 0]],
+    [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]]]);
+  function prism(axis, sides) {
+    var out = [], ring = [], i;
+    for (i = 0; i < sides; i++) { var a = Math.PI * 2 * i / sides; ring.push([Math.cos(a) * h, Math.sin(a) * h]); }
+    function pt(p, along) { return axis === 0 ? [along, p[0], p[1]] : axis === 1 ? [p[0], along, p[1]] : [p[0], p[1], along]; }
+    for (i = 0; i < sides; i++) { var p0 = ring[i], p1 = ring[(i + 1) % sides]; out.push([pt(p0, -h), pt(p1, -h), pt(p1, h), pt(p0, h)]); }
+    var c0 = [], c1 = []; for (i = 0; i < sides; i++) { c0.push(pt(ring[i], -h)); c1.push(pt(ring[i], h)); }
+    out.push(c0, c1); return fixWinding(out);
+  }
+  T.CUBE = CUBE; T.PYR = PYR; T.PX = prism(0, 8); T.PY = prism(1, 8); T.PZ = prism(2, 8);
+
+  /* ---- camera ---- */
+  T.camera = function (pos, target, fovDeg) {
+    var f = norm3([target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]]);
+    var r = norm3(cross(f, [0, 1, 0])), u = cross(r, f);
+    cam = { p: pos, f: f, r: r, u: u, focal: (H / 2) / Math.tan(fovDeg * Math.PI / 360) };
+  };
+  T.target = function (g) { ctx = g || TV.ctx; };      // draw into another canvas context (null = the screen)
+  T.fog = function (col, s, e) { fogCol = parse(col); fogS = s; fogE = e; };
+  T.light = function (ambient) { amb = ambient; };
+  T.view = function (p) {       // world -> [x, y, depth] in camera space (before projection)
+    var vx = p[0] - cam.p[0], vy = p[1] - cam.p[1], vz = p[2] - cam.p[2];
+    return [vx * cam.r[0] + vy * cam.r[1] + vz * cam.r[2], vx * cam.u[0] + vy * cam.u[1] + vz * cam.u[2], vx * cam.f[0] + vy * cam.f[1] + vz * cam.f[2]];
+  };
+  /* world point -> screen [x, y, depth], or null when behind the camera */
+  T.project = function (p) {
+    var v = T.view(p); if (v[2] < 0.5) return null;
+    var k = cam.focal / v[2]; return [W / 2 + v[0] * k, H / 2 - v[1] * k, v[2]];
+  };
+  T.scale = function (z) { return cam.focal / z; };
+
+  function clipNear(pts) {           // Sutherland-Hodgman against z = near in view space
+    var out = [], n = pts.length, i, near = 0.6;
+    for (i = 0; i < n; i++) {
+      var a = pts[i], b = pts[(i + 1) % n], ina = a[2] >= near, inb = b[2] >= near;
+      if (ina) out.push(a);
+      if (ina !== inb) { var t = (near - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, near]); }
+    }
+    return out;
+  }
+  function paint(g, pts, css) {      // pts in view space
+    var q = clipNear(pts); if (q.length < 3) return;
+    g.beginPath();
+    for (var i = 0; i < q.length; i++) {
+      var k = cam.focal / q[i][2], x = W / 2 + q[i][0] * k, y = H / 2 - q[i][1] * k;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.closePath(); g.fillStyle = css; g.fill(); g.lineWidth = 0.7; g.strokeStyle = css; g.stroke();
+  }
+  function fogMix(col, d) {
+    var f = (d - fogS) / (fogE - fogS); f = f < 0 ? 0 : f > 1 ? 1 : f;
+    return 'rgb(' + Math.round(col[0] + (fogCol[0] - col[0]) * f) + ',' + Math.round(col[1] + (fogCol[1] - col[1]) * f) + ',' + Math.round(col[2] + (fogCol[2] - col[2]) * f) + ')';
+  }
+
+  /* ---- drawing a shape: queue its visible faces, flush() sorts and paints them ---- */
+  T.shape = function (shape, x, y, z, sx, sy, sz, color, emit, yaw) {
+    var col = parse(color), cs = 1, sn = 0, i, k;
+    if (yaw) { cs = Math.cos(yaw); sn = Math.sin(yaw); }
+    for (i = 0; i < shape.length; i++) {
+      var f = shape[i], vs = [], vw = [];
+      for (k = 0; k < f.length; k++) {
+        var px = f[k][0] * sx, py = f[k][1] * sy, pz = f[k][2] * sz;
+        var wx = x + px * cs + pz * sn, wz = z - px * sn + pz * cs, wy = y + py;
+        vw.push([wx, wy, wz]);
+      }
+      var a = vw[0], b = vw[1], c = vw[2];
+      var n = norm3(cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]));
+      var ccx = 0, ccy = 0, ccz = 0; for (k = 0; k < vw.length; k++) { ccx += vw[k][0]; ccy += vw[k][1]; ccz += vw[k][2]; }
+      ccx /= vw.length; ccy /= vw.length; ccz /= vw.length;
+      if (n[0] * (cam.p[0] - ccx) + n[1] * (cam.p[1] - ccy) + n[2] * (cam.p[2] - ccz) <= 0) continue;     // back face
+      var d = T.view([ccx, ccy, ccz]);
+      if (d[2] < 0.6 && d[2] > -200) { /* partly behind: still try, clipping handles it */ }
+      for (k = 0; k < vw.length; k++) vs.push(T.view(vw[k]));
+      var allBehind = true; for (k = 0; k < vs.length; k++) if (vs[k][2] >= 0.6) allBehind = false;
+      if (allBehind) continue;
+      var l = amb + (1 - amb) * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+      if (emit) l = l + (1 - l) * emit;
+      faces.push({ d: d[2], v: vs, c: [col[0] * l, col[1] * l, col[2] * l] });
+    }
+  };
+  T.box = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(CUBE, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.pyramid = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(PYR, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismY = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PY, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismX = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PX, x, y, z, sx, sy, sz, color, emit, yaw); };
+  T.prismZ = function (x, y, z, sx, sy, sz, color, emit, yaw) { T.shape(T.PZ, x, y, z, sx, sy, sz, color, emit, yaw); };
+
+  T.flush = function () {
+    faces.sort(function (a, b) { return b.d - a.d; });
+    for (var i = 0; i < faces.length; i++) { var f = faces[i]; paint(ctx, f.v, fogMix(f.c, f.d)); }
+    faces.length = 0;
+  };
+  /* A flat quad on the ground (or any plane) painted immediately, before the sorted shapes. corners in world space. */
+  T.quad = function (a, b, c, d, color, g) {
+    var col = parse(color); var vs = [T.view(a), T.view(b), T.view(c), T.view(d)];
+    var cz = (vs[0][2] + vs[1][2] + vs[2][2] + vs[3][2]) / 4;
+    paint(g || ctx, vs, typeof color === 'string' && color.charAt(0) !== '#' ? color : fogMix([col[0], col[1], col[2]], cz));
+  };
+  T.shadow = function (x, z, sx, sz, y) {
+    var yy = y || 0.02, vs = [T.view([x - sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z - sz / 2 + 0.25]), T.view([x + sx / 2 + 0.3, yy, z + sz / 2 + 0.25]), T.view([x - sx / 2 + 0.3, yy, z + sz / 2 + 0.25])];
+    paint(ctx, vs, 'rgba(5,8,25,.35)');
+  };
+  T.sky = function (top, bottom, horizonY) {
+    var g = ctx.createLinearGradient(0, 0, 0, horizonY || H * 0.6); g.addColorStop(0, top); g.addColorStop(1, bottom);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  };
+  /* Draw static scenery once into an offscreen canvas and reuse it every frame (the camera must not move). */
+  var layer = null, layerKey = '';
+  T.cached = function (key, fn) {
+    if (!layer || layerKey !== key) {
+      layer = document.createElement('canvas'); layer.width = W; layer.height = H; layerKey = key;
+      var g = layer.getContext('2d'); fn(g);
+    }
+    ctx.drawImage(layer, 0, 0);
+  };
+  T.uncache = function () { layer = null; layerKey = ''; };
+  T.quadTo = function (g, a, b, c, d, color) { T.quad(a, b, c, d, color, g); };
+  T.ground = function (cx, cz, hw, hd, color) { T.quad([cx - hw, 0, cz + hd], [cx + hw, 0, cz + hd], [cx + hw, 0, cz - hd], [cx - hw, 0, cz - hd], color); };
+  T.cam = function () { return cam; };
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H, G = TV3D;
+  var PL = 30, PW = 18, GWID = 4.2, GHT = 2.4, MATCH = 100;
+  var state = 'title', t = 0, clock = MATCH, score = [0, 0], best = TV.store.get('fb_best', 0), msg = '', msgT = 0, freeze = 0, camX = 0;
+  var ball = { x: 0, y: 0.3, z: 0, vx: 0, vy: 0, vz: 0, owner: -1, lastTouch: -1, cool: 0 };
+  var players = [], ctl = 0, charge = 0, charging = false, lunge = 0, sprint = false, ai = 0;
+  var TEAMCOL = ['#2f7de1', '#e53935'], KEEPCOL = ['#ffd21f', '#43a047'];
+
+  /* base positions for team 0 (attacks +x); team 1 mirrors */
+  var ROLES = [{ r: 'gk', x: -27.5, z: 0 }, { r: 'def', x: -17, z: 0 }, { r: 'mid', x: -6, z: -8 }, { r: 'fwd', x: 3, z: 7 }];
+
+  function mkPlayer(team, k) {
+    var sgn = team === 0 ? 1 : -1, R = ROLES[k];
+    return { team: team, role: R.r, bx: R.x * sgn, bz: R.z, x: R.x * sgn, z: R.z, vx: 0, vz: 0, face: team === 0 ? 0 : Math.PI, speed: R.r === 'gk' ? 5.2 : (team === 0 ? 6.4 : 5.7), cool: 0, run: 0, lungeT: 0, tackleCd: 0 };
+  }
+  function kickoff(toTeam) {
+    var k;
+    players = [];
+    for (k = 0; k < 4; k++) players.push(mkPlayer(0, k));
+    for (k = 0; k < 4; k++) players.push(mkPlayer(1, k));
+    ball.x = 0; ball.z = 0; ball.y = 0.3; ball.vx = ball.vy = ball.vz = 0; ball.owner = -1; ball.cool = 0.6;
+    var side = toTeam === 0 ? 0 : 4, kk = side + 3;
+    players[kk].x = toTeam === 0 ? -1.4 : 1.4; players[kk].z = 0;
+    ctl = 3; charging = false; charge = 0;
+  }
+  function newMatch() { score = [0, 0]; clock = MATCH; kickoff(0); state = 'play'; freeze = 1.2; msg = 'KICK OFF'; msgT = 1.2; }
+  function say(m, s) { msg = m; msgT = s || 1.6; }
+
+  function goalSign(team) { return team === 0 ? 1 : -1; }          // x direction the team attacks
+  function dist(a, b) { var dx = a.x - b.x, dz = a.z - b.z; return Math.sqrt(dx * dx + dz * dz); }
+
+  /* ------------------------------------------------------------ input */
+  TV.on(function (type, key, rep) {
+    if (key === 'back' && type === 'down') { TV.exit(); return; }
+    if (state === 'title' || state === 'over') { if (type === 'down' && (key === 'ok' || key === 'start')) newMatch(); return; }
+    if (state === 'pause') { if (type === 'down' && (key === 'ok' || key === 'start')) state = 'play'; return; }
+    if (type === 'down' && key === 'start') { state = 'pause'; return; }
+    if (freeze > 0) return;
+    if (key === 'ok') {
+      if (type === 'down' && !rep) {
+        if (ball.owner === ctl) { charging = true; charge = 0; }
+        else if (players[ctl].tackleCd <= 0) { players[ctl].lungeT = 0.28; players[ctl].tackleCd = 0.7; }
+      } else if (type === 'up' && charging) { charging = false; releaseKick(); }
+    } else if (key === 'k2' && type === 'down') { switchPlayer(); }
+  });
+  function switchPlayer() {
+    var best = -1, bd = 1e9, k, d;
+    for (k = 0; k < 4; k++) { if (k === ctl || players[k].role === 'gk') continue; d = dist(players[k], ball); if (d < bd) { bd = d; best = k; } }
+    if (best >= 0) ctl = best;
+  }
+  (function () {     /* on-screen buttons for touch screens */
+    var pad = document.getElementById('pad'); if (!pad) return;
+    var row = document.createElement('div'), defs = [['k1', 'Sprint'], ['k2', 'Switch'], ['start', 'Pause']];
+    function wire(b, k) {
+      function dn(e) { e.preventDefault(); TV.fire('down', k, false); }
+      function up(e) { e.preventDefault(); TV.fire('up', k, false); }
+      b.addEventListener('touchstart', dn, false); b.addEventListener('touchend', up, false); b.addEventListener('mousedown', dn, false); b.addEventListener('mouseup', up, false);
+    }
+    for (var d = 0; d < defs.length; d++) { var b = document.createElement('span'); b.className = 'pb'; b.style.fontSize = '12px'; b.appendChild(document.createTextNode(defs[d][1])); wire(b, defs[d][0]); row.appendChild(b); }
+    pad.appendChild(row);
+  })();
+
+  /* ------------------------------------------------------------ kicking */
+  function kickBall(p, tx, tz, power, lift) {
+    var dx = tx - ball.x, dz = tz - ball.z, d = Math.sqrt(dx * dx + dz * dz) || 1;
+    ball.vx = dx / d * power; ball.vz = dz / d * power; ball.vy = lift; ball.y = Math.max(ball.y, 0.35);
+    ball.owner = -1; ball.lastTouch = p.team; ball.cool = 0.35; p.cool = 0.45;
+    TV.beep(p.team === 0 ? 300 : 240, 0.07, 'square', 0.1, -90);
+  }
+  function bestPass(p, aimx, aimz) {
+    var k, best = null, bs = -1e9, mates = p.team === 0 ? 0 : 4, sg = goalSign(p.team);
+    for (k = mates; k < mates + 4; k++) {
+      var q = players[k]; if (q === p) continue;
+      var dx = q.x - p.x, dz = q.z - p.z, d = Math.sqrt(dx * dx + dz * dz) || 1, s = (dx * sg) * 0.03 - d * 0.02;
+      if (q.role === 'gk') s -= 5;
+      if (aimx || aimz) s += (dx / d * aimx + dz / d * aimz) * 3;
+      if (d < 5) s -= 2;
+      if (s > bs) { bs = s; best = q; }
+    }
+    return best;
+  }
+  function releaseKick() {
+    var p = players[ctl], ax = (TV.held.right ? 1 : 0) - (TV.held.left ? 1 : 0), az = (TV.held.down ? 1 : 0) - (TV.held.up ? 1 : 0);
+    if (ball.owner !== ctl) return;
+    if (charge < 0.18) {                                         // quick tap: pass
+      var q = bestPass(p, ax, az);
+      if (q) kickBall(p, q.x + q.vx * 0.35, q.z + q.vz * 0.35, 16 + Math.min(10, dist(p, q) * 0.5), 0.5);
+    } else {                                                     // hold: shoot at goal
+      var sg = goalSign(p.team), gz = TV.clamp(az * 3.4 + (p.z * -0.05), -GWID + 0.6, GWID - 0.6);
+      kickBall(p, sg * (PL + 1), gz, 16 + charge * 16, 1.5 + charge * 4.5);
+    }
+  }
+
+  /* ------------------------------------------------------------ AI + movement */
+  function moveToward(p, tx, tz, dt, spd) {
+    var dx = tx - p.x, dz = tz - p.z, d = Math.sqrt(dx * dx + dz * dz);
+    if (d < 0.25) { p.vx *= 0.6; p.vz *= 0.6; return d; }
+    p.vx += (dx / d * spd - p.vx) * Math.min(1, dt * 9); p.vz += (dz / d * spd - p.vz) * Math.min(1, dt * 9);
+    return d;
+  }
+  function thinkGK(p, dt) {
+    var sg = p.team === 0 ? -1 : 1, gx = sg * (PL - 1.8), toward = (ball.vx * sg > 4) && Math.abs(ball.x - gx) < 16;
+    var tz = TV.clamp(ball.z * 0.45, -GWID, GWID);
+    if (toward) { var tt = Math.max(0.05, Math.abs(gx - ball.x) / Math.max(1, Math.abs(ball.vx))); tz = TV.clamp(ball.z + ball.vz * tt, -GWID - 0.5, GWID + 0.5); }
+    var close = dist(p, ball) < 6.5 && Math.abs(ball.x - gx) < 8 && ball.owner < 0;
+    if (close) moveToward(p, ball.x, ball.z, dt, p.speed * 1.15); else moveToward(p, gx + (toward ? sg * 0.5 * -1 : 0), tz, dt, p.speed * (toward ? 1.5 : 1));
+  }
+  function think(k, dt) {
+    var p = players[k], team = p.team, sg = goalSign(team), mates = team === 0 ? 0 : 4, opp = team === 0 ? 4 : 0, i;
+    if (p.role === 'gk') { thinkGK(p, dt); return; }
+    var hasBall = ball.owner >= 0 && players[ball.owner].team === team, carrier = ball.owner === k;
+    /* who is closest to the ball on my team (not keeper)? */
+    var near = -1, nd = 1e9, d;
+    for (i = mates + 1; i < mates + 4; i++) { d = dist(players[i], ball); if (d < nd) { nd = d; near = i; } }
+    if (carrier) {
+      var gx = sg * (PL + 0.5), gz = 0, dgoal = Math.abs(gx - p.x), tx = gx, tz = p.z * 0.6, near2 = null, nd2 = 1e9;
+      for (i = opp; i < opp + 4; i++) { d = dist(players[i], p); if (d < nd2) { nd2 = d; near2 = players[i]; } }
+      if (near2 && nd2 < 3.4 && near2.role !== 'gk') { var side = (p.z > near2.z) ? 1 : -1; tz = p.z + side * 4; tx = p.x + sg * 2; }
+      else if (dgoal < 11) { tz = p.z * 0.5; }
+      moveToward(p, tx, TV.clamp(tz, -PW + 2, PW - 2), dt, p.speed * 1.05);
+      p.thinkT = (p.thinkT || 0) - dt;
+      var kp = players[opp];                                    // opposing keeper
+      if (dgoal < 13 && p.thinkT <= 0 && p.cool <= 0) { var sz = (kp.z > 0 ? -1 : 1) * (1.4 + Math.random() * 1.6); kickBall(p, gx, sz, 19 + Math.random() * 7, 1.5 + Math.random() * 2.5); p.thinkT = 0.5; }
+      else if (near2 && nd2 < 2.6 && p.thinkT <= 0 && p.cool <= 0 && Math.random() < 0.06) { var q = bestPass(p, 0, 0); if (q) { kickBall(p, q.x + q.vx * 0.3, q.z + q.vz * 0.3, 17, 0.4); p.thinkT = 0.6; } }
+      return;
+    }
+    if (hasBall) {                                              // support: run into space ahead of the carrier
+      var cr = players[ball.owner], ox = p.bx + cr.x * 0.5 + sg * 3, oz = p.bz * 1.1 + (k % 2 ? 4 : -4);
+      moveToward(p, TV.clamp(ox, -PL + 4, PL - 4), TV.clamp(oz, -PW + 3, PW - 3), dt, p.speed * 0.9); return;
+    }
+    if (k === near || (ball.owner < 0 && nd < 9)) {             // go and get the ball
+      var tx2 = ball.x + ball.vx * 0.2, tz2 = ball.z + ball.vz * 0.2;
+      if (ball.owner >= 0) { var o = players[ball.owner]; tx2 = o.x; tz2 = o.z; }
+      moveToward(p, tx2, tz2, dt, p.speed * 1.05);
+      if (ball.owner >= 0 && dist(p, players[ball.owner]) < 1.5 && p.tackleCd <= 0) { p.tackleCd = 1.0; if (Math.random() < 0.38 + (team === 1 ? 0.0 : 0.1)) stealBall(k); }
+      return;
+    }
+    /* hold shape: slide with the ball */
+    var hx = p.bx + ball.x * 0.35, hz = p.bz + ball.z * 0.3;
+    moveToward(p, TV.clamp(hx, -PL + 3, PL - 3), TV.clamp(hz, -PW + 3, PW - 3), dt, p.speed * 0.75);
+  }
+  function stealBall(k) { ball.owner = k; ball.lastTouch = players[k].team; players[k].cool = 0.2; TV.beep(200, 0.06, 'triangle', 0.08); }
+
+  function userMove(p, dt) {
+    var ax = (TV.held.right ? 1 : 0) - (TV.held.left ? 1 : 0), az = (TV.held.down ? 1 : 0) - (TV.held.up ? 1 : 0);
+    sprint = !!TV.held.k1;
+    var spd = p.speed * (sprint ? 1.28 : 1) * (charging ? 0.5 : 1);
+    if (p.lungeT > 0) { spd = 10; ax = Math.cos(p.face); az = Math.sin(p.face); }
+    var m = Math.sqrt(ax * ax + az * az) || 1;
+    var tvx = ax / m * spd * (ax || az ? 1 : 0), tvz = az / m * spd * (ax || az ? 1 : 0);
+    p.vx += (tvx - p.vx) * Math.min(1, dt * 11); p.vz += (tvz - p.vz) * Math.min(1, dt * 11);
+  }
+
+  function update(dt) {
+    t += dt; if (msgT > 0) msgT -= dt;
+    if (state !== 'play') return;
+    if (dt > 0.05) dt = 0.05;
+    if (freeze > 0) { freeze -= dt; if (freeze <= 0 && msg === 'KICK OFF') msg = ''; }
+    var k, p, i;
+    if (freeze <= 0) {
+      clock -= dt;
+      if (clock <= 0) { clock = 0; state = 'over'; var diff = score[0] - score[1]; if (diff > best) { best = diff; TV.store.set('fb_best', best); } TV.beep(440, 0.4, 'triangle', 0.12); return; }
+      if (charging) charge = Math.min(1, charge + dt / 0.85);
+      /* auto-switch to the nearest field player when the ball is loose or the other team has it */
+      if (ball.owner !== ctl && !(players[ctl].lungeT > 0)) {
+        var bi = -1, bd = 1e9, dd;
+        for (k = 1; k < 4; k++) { dd = dist(players[k], ball); if (dd < bd) { bd = dd; bi = k; } }
+        if (bi >= 0 && bi !== ctl && bd < dist(players[ctl], ball) - 1.5) ctl = bi;
+      }
+    }
+    for (k = 0; k < 8; k++) {
+      p = players[k];
+      if (p.cool > 0) p.cool -= dt; if (p.tackleCd > 0) p.tackleCd -= dt;
+      if (p.lungeT > 0) p.lungeT -= dt;
+      if (freeze > 0) { p.vx *= 0.8; p.vz *= 0.8; }
+      else if (k === ctl) userMove(p, dt); else think(k, dt);
+      p.x = TV.clamp(p.x + p.vx * dt, -PL + 0.6, PL - 0.6); p.z = TV.clamp(p.z + p.vz * dt, -PW + 0.6, PW - 0.6);
+      var sp = Math.sqrt(p.vx * p.vx + p.vz * p.vz); p.run += sp * dt * 1.6;
+      if (sp > 0.7) p.face = Math.atan2(p.vz, p.vx);
+    }
+    /* player vs player: gentle push apart */
+    for (i = 0; i < 8; i++) for (k = i + 1; k < 8; k++) {
+      var a = players[i], b = players[k], dx = b.x - a.x, dz = b.z - a.z, dd2 = dx * dx + dz * dz;
+      if (dd2 < 0.81 && dd2 > 0.0001) { var d3 = Math.sqrt(dd2), pu = (0.9 - d3) / 2; a.x -= dx / d3 * pu; a.z -= dz / d3 * pu; b.x += dx / d3 * pu; b.z += dz / d3 * pu; }
+    }
+    /* ball */
+    if (ball.cool > 0) ball.cool -= dt;
+    if (ball.owner >= 0) {
+      var o = players[ball.owner], fx = Math.cos(o.face), fz = Math.sin(o.face), wob = Math.sin(o.run) * 0.12;
+      ball.x += (o.x + fx * 0.85 - ball.x) * Math.min(1, dt * 18); ball.z += (o.z + fz * 0.85 + wob - ball.z) * Math.min(1, dt * 18); ball.y = 0.32; ball.vx = o.vx; ball.vz = o.vz; ball.vy = 0;
+      ball.lastTouch = o.team;
+      /* opponents challenge the carrier */
+      for (k = 0; k < 8; k++) {
+        p = players[k]; if (p.team === o.team || p.role === 'gk' && dist(p, o) > 1.3) continue;
+        if (p.lungeT > 0 && dist(p, o) < 1.5) { stealBall(k); break; }
+      }
+      if (ball.owner >= 0 && players[ball.owner].role === 'gk' && !players[ball.owner].holdT) players[ball.owner].holdT = 0.7;
+      if (ball.owner >= 0) { var og = players[ball.owner]; if (og.role === 'gk') { og.holdT -= dt; if (og.holdT <= 0) { og.holdT = 0; var sgg = goalSign(og.team); kickBall(og, sgg * 6, (Math.random() - 0.5) * 24, 21, 4); } } }
+    } else {
+      ball.x += ball.vx * dt; ball.z += ball.vz * dt; ball.y += ball.vy * dt; ball.vy -= 18 * dt;
+      if (ball.y <= 0.3) { ball.y = 0.3; if (ball.vy < -2) ball.vy = -ball.vy * 0.45; else ball.vy = 0; }
+      if (ball.y <= 0.31) { var fr = Math.exp(-0.75 * dt); ball.vx *= fr; ball.vz *= fr; }
+      if (Math.abs(ball.z) > PW - 0.3) { ball.z = (ball.z > 0 ? 1 : -1) * (PW - 0.3); ball.vz = -ball.vz * 0.55; }
+      if (Math.abs(ball.x) > PL) {
+        var inMouth = Math.abs(ball.z) < GWID && ball.y < GHT + 0.3;
+        if (inMouth && freeze <= 0) { goal(ball.x > 0 ? 0 : 1); return; }
+        ball.x = (ball.x > 0 ? 1 : -1) * PL; ball.vx = -ball.vx * 0.5;
+      }
+      /* pick-up / keeper save */
+      if (ball.cool <= 0 && freeze <= 0) {
+        var bestK = -1, bdist = 1e9;
+        for (k = 0; k < 8; k++) {
+          p = players[k]; var reach = p.role === 'gk' ? 1.5 : 0.95, dz2 = dist(p, ball);
+          var hi = ball.y > (p.role === 'gk' ? 2.8 : 1.1); if (hi || p.cool > 0) continue;
+          if (dz2 < reach && dz2 < bdist) { bdist = dz2; bestK = k; }
+        }
+        if (bestK >= 0) {
+          p = players[bestK];
+          if (p.role === 'gk' && Math.sqrt(ball.vx * ball.vx + ball.vz * ball.vz) > 14 && Math.random() < 0.28) { kickBall(p, p.team === 0 ? 8 : -8, (Math.random() - 0.5) * 20, 17, 5); say('SAVE!', 0.9); }
+          else { ball.owner = bestK; ball.lastTouch = p.team; if (p.team === 0 && p.role !== 'gk') ctl = bestK; }
+        }
+      }
+    }
+    camX += (TV.clamp(ball.x * 0.7, -17, 17) - camX) * Math.min(1, dt * 3);
+  }
+  function goal(team) {
+    score[team]++; say('GOAL!', 2); freeze = 2.2; TV.beep(660, 0.15, 'square', 0.12); setTimeout(function () { TV.beep(880, 0.25, 'square', 0.12); }, 160);
+    ball.vx = ball.vz = ball.vy = 0; ball.owner = -1;
+    setTimeout(function () { if (state === 'play') { kickoff(1 - team); freeze = 1.0; } }, 1700);
+  }
+
+  /* ------------------------------------------------------------ 3D drawing */
+  function pitch() {
+    var i, y = 0, g;
+    G.quad([-PL - 14, -0.02, PW + 12], [PL + 14, -0.02, PW + 12], [PL + 14, -0.02, -PW - 12], [-PL - 14, -0.02, -PW - 12], '#2f7a2f');
+    for (i = 0; i < 12; i++) {
+      var x0 = -PL + i * (PL * 2 / 12), x1 = x0 + PL * 2 / 12;
+      G.quad([x0, 0, PW], [x1, 0, PW], [x1, 0, -PW], [x0, 0, -PW], i % 2 ? '#3e9a3e' : '#46a846');
+    }
+    var wl = '#f4f4f4', lw = 0.18;
+    function line(x0, z0, x1, z1) { var dx = x1 - x0, dz = z1 - z0, d = Math.sqrt(dx * dx + dz * dz), nx = -dz / d * lw / 2, nz = dx / d * lw / 2; G.quad([x0 + nx, 0.02, z0 + nz], [x1 + nx, 0.02, z1 + nz], [x1 - nx, 0.02, z1 - nz], [x0 - nx, 0.02, z0 - nz], wl); }
+    line(-PL, -PW, PL, -PW); line(PL, -PW, PL, PW); line(PL, PW, -PL, PW); line(-PL, PW, -PL, -PW); line(0, -PW, 0, PW);
+    for (i = 0; i < 2; i++) { var s = i ? -1 : 1; line(s * PL, -9, s * (PL - 7), -9); line(s * (PL - 7), -9, s * (PL - 7), 9); line(s * (PL - 7), 9, s * PL, 9); line(s * PL, -4.6, s * (PL - 2.6), -4.6); line(s * (PL - 2.6), -4.6, s * (PL - 2.6), 4.6); line(s * (PL - 2.6), 4.6, s * PL, 4.6); }
+    var seg = 20; for (i = 0; i < seg; i++) { var a0 = i / seg * Math.PI * 2, a1 = (i + 1) / seg * Math.PI * 2; line(Math.cos(a0) * 5, Math.sin(a0) * 5, Math.cos(a1) * 5, Math.sin(a1) * 5); }
+  }
+  function goals() {
+    var s, post = '#f4f4f4';
+    for (s = -1; s <= 1; s += 2) {
+      var gx = s * PL;
+      G.box(gx, GHT / 2, -GWID, 0.22, GHT, 0.22, post); G.box(gx, GHT / 2, GWID, 0.22, GHT, 0.22, post); G.box(gx, GHT, 0, 0.22, 0.22, GWID * 2 + 0.22, post);
+      G.box(gx + s * 1.2, GHT / 2, -GWID, 0.05, GHT, 0.05, '#cfd6e0'); G.box(gx + s * 1.2, GHT / 2, GWID, 0.05, GHT, 0.05, '#cfd6e0');
+      G.box(gx + s * 2.4, GHT / 2, 0, 0.1, GHT, GWID * 2, '#aab4c4', 0.15);
+      G.box(gx + s * 1.2, GHT, 0, 2.4, 0.05, GWID * 2, '#c4ccd8', 0.2);
+    }
+    /* low boards and a crowd along the far side */
+    G.box(0, 0.45, -PW - 0.6, PL * 2 + 6, 0.9, 0.4, '#223566'); G.box(0, 0.45, PW + 0.6, PL * 2 + 6, 0.9, 0.4, '#223566');
+    var i, cols = ['#e53935', '#fdd835', '#1e88e5', '#ffffff', '#43a047', '#fb8c00'];
+    for (i = -14; i <= 14; i++) { G.box(i * 2.3, 2.4 + (i % 3) * 0.2, -PW - 4.4, 1.6, 1.6 + (i % 2) * 0.4, 1.6, cols[(i * 7 + 98) % 6]); G.box(i * 2.3, 1.1, -PW - 3.6, 2.2, 1.0, 1.4, '#47506a'); }
+    G.box(0, 1.2, -PW - 3.9, PL * 2 + 14, 2.0, 0.6, '#3a4260');
+  }
+  function drawPlayer(p, k) {
+    var col = p.role === 'gk' ? KEEPCOL[p.team] : TEAMCOL[p.team], yaw = -p.face + Math.PI / 2 - Math.PI / 2, sw = Math.sin(p.run * 2) * 0.35, hop = 0;
+    G.shadow(p.x, p.z, 1.0, 1.0, 0.03);
+    if (p.lungeT > 0) { G.box(p.x, 0.55, p.z, 1.5, 0.6, 0.7, col, 0, -p.face); G.box(p.x + Math.cos(p.face) * 0.9, 0.5, p.z + Math.sin(p.face) * 0.9, 0.5, 0.5, 0.5, '#f0c8a0'); return; }
+    var fx = Math.cos(p.face), fz = Math.sin(p.face), px = -fz, pz = fx;
+    G.box(p.x + px * 0.2 + fx * sw * 0.4, 0.4, p.z + pz * 0.2 + fz * sw * 0.4, 0.28, 0.8, 0.28, '#1b2340');
+    G.box(p.x - px * 0.2 - fx * sw * 0.4, 0.4, p.z - pz * 0.2 - fz * sw * 0.4, 0.28, 0.8, 0.28, '#1b2340');
+    G.box(p.x, 1.15, p.z, 0.8, 0.8, 0.5, col, 0, -p.face + Math.PI / 2);
+    G.box(p.x, 1.82, p.z, 0.5, 0.5, 0.5, '#f0c8a0');
+    G.box(p.x - fx * 0.05, 2.1, p.z - fz * 0.05, 0.54, 0.16, 0.54, p.team ? '#6d1b1b' : '#13335f');
+  }
+  function draw() {
+    c.fillStyle = '#8fc9ff'; c.fillRect(0, 0, W, H);
+    var g = c.createLinearGradient(0, 0, 0, H * 0.45); g.addColorStop(0, '#5aa7ee'); g.addColorStop(1, '#cfe9ff'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    G.camera([camX, 21, 27], [camX, 0, 1.5], 50); G.fog('#cfe9ff', 80, 200); G.light(0.58);
+    pitch(); goals();
+    var k, p, order = [];
+    /* ring under the player you control */
+    if (state === 'play' || state === 'pause') {
+      var cp = players[ctl]; if (cp) { var r = 0.9 + Math.sin(t * 8) * 0.06; G.quad([cp.x - r, 0.03, cp.z + r], [cp.x + r, 0.03, cp.z + r], [cp.x + r, 0.03, cp.z - r], [cp.x - r, 0.03, cp.z - r], '#ffe63c'); }
+    }
+    G.shadow(ball.x, ball.z, 0.7 + ball.y * 0.1, 0.7 + ball.y * 0.1, 0.03);
+    for (k = 0; k < players.length; k++) drawPlayer(players[k], k);
+    if (players.length) { var cp2 = players[ctl]; G.box(cp2.x, 2.9 + Math.sin(t * 6) * 0.1, cp2.z, 0.4, 0.4, 0.4, '#ffe03c', 0.6); }
+    G.prismY(ball.x, ball.y, ball.z, 0.62, 0.62, 0.62, '#ffffff');
+    G.flush();
+    hud();
+  }
+  function hud() {
+    var m = Math.floor(clock / 60), s = Math.floor(clock % 60);
+    c.fillStyle = 'rgba(10,20,50,0.72)'; c.fillRect(W / 2 - 150, 8, 300, 40);
+    TV.text('YOU ' + score[0] + '  -  ' + score[1] + ' CPU', W / 2, 36, 24, '#fff', 'center');
+    TV.text(m + ':' + (s < 10 ? '0' : '') + s, W / 2 + 190, 36, 22, '#ffd21f', 'center');
+    if (charging) { c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillRect(W / 2 - 100, H - 70, 200, 16); c.fillStyle = charge < 0.7 ? '#7dff6a' : '#ff5a4e'; c.fillRect(W / 2 - 98, H - 68, 196 * charge, 12); }
+    if (msgT > 0 && msg) TV.text(msg, W / 2, 130, 44, '#fff', 'center');
+    if (state === 'title') TV.panel('FOOTBALL 3D', ['Press OK to kick off', 'Arrows run, tap OK to pass, hold OK to shoot', 'OK without the ball tackles. 1 sprints, 2 switches player', 'You play blue, towards the right. ' + MATCH + ' seconds. Best lead ' + best], '#2f7de1');
+    else if (state === 'pause') TV.panel('PAUSED', ['OK or P: continue', 'Back: return to the menu'], '#ffd21f');
+    else if (state === 'over') TV.panel(score[0] > score[1] ? 'YOU WIN!' : score[0] < score[1] ? 'YOU LOSE' : 'DRAW', ['Final score  ' + score[0] + ' - ' + score[1], 'Press OK to play again'], score[0] > score[1] ? '#27ae60' : '#e67e22');
+  }
+
+  kickoff(0);
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

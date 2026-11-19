@@ -205,6 +205,7 @@ var TV3D = (function () {
     var r = norm3(cross(f, [0, 1, 0])), u = cross(r, f);
     cam = { p: pos, f: f, r: r, u: u, focal: (H / 2) / Math.tan(fovDeg * Math.PI / 360) };
   };
+  T.target = function (g) { ctx = g || TV.ctx; };      // draw into another canvas context (null = the screen)
   T.fog = function (col, s, e) { fogCol = parse(col); fogS = s; fogE = e; };
   T.light = function (ambient) { amb = ambient; };
   T.view = function (p) {       // world -> [x, y, depth] in camera space (before projection)
