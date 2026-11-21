@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Ludo</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1030;overflow:hidden;font-family:Arial,Helvetica,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+  #wrap{position:relative;width:100%;height:100%;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center}
+  canvas{display:block;background:#0b1030}
+  #toast{position:absolute;left:0;right:0;bottom:3%;text-align:center;color:#cfd6ff;font-size:18px;text-shadow:0 1px 3px #000;pointer-events:none;opacity:0;-webkit-transition:opacity .4s;transition:opacity .4s}
+  #pad{position:absolute;left:0;right:0;bottom:0;display:none;padding:12px;box-sizing:border-box;pointer-events:none;-webkit-justify-content:space-between;justify-content:space-between;-webkit-align-items:flex-end;align-items:flex-end}
+  .touch #pad{display:-webkit-flex;display:flex}
+  .pb{pointer-events:auto;width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.45);color:#fff;font-size:24px;line-height:64px;text-align:center;margin:4px;display:inline-block;-webkit-tap-highlight-color:transparent}
+  .pb.on{background:rgba(255,255,255,.5)}
+  #exit{position:absolute;right:8px;top:6px;color:#fff;background:rgba(0,0,0,.35);border-radius:6px;padding:6px 10px;font-size:15px;display:none}
+  .touch #exit{display:block}
+</style></head>
+<body><div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="toast"></div>
+  <div id="exit">Menu</div>
+  <div id="pad"><div><span class="pb" data-k="left">&#9664;</span><span class="pb" data-k="right">&#9654;</span></div>
+  <div><span class="pb" data-k="up">&#9650;</span><span class="pb" data-k="down">&#9660;</span><span class="pb" data-k="ok">OK</span><span class="pb" id="vw" data-k="view" style="display:none">2D/3D</span></div></div>
+</div>
+<script>
+'use strict';
+/* ---------- TV: input, loop, audio, helpers ---------- */
+var TV = (function () {
+  var T = {}, cv = document.getElementById('c'), handlers = [], held = {}, actx = null, muted = false;
+  T.cv = cv; T.ctx = cv.getContext('2d'); T.W = cv.width; T.H = cv.height; T.held = held; T.hint = "Setup: Up\/Down seat, Left\/Right person or computer, OK start. Game: OK roll, Left\/Right choose token, OK move. Back: pause.";
+
+  /* Turn any key (TV remote, keyboard, game pad app) into: left right up down ok back start */
+  function norm(e) {
+    var k = e.key, c = e.keyCode || e.which;
+    if (k === 'ArrowLeft' || c === 37 || c === 21 || k === 'a' || k === 'A') return 'left';
+    if (k === 'ArrowRight' || c === 39 || c === 22 || k === 'd' || k === 'D') return 'right';
+    if (k === 'ArrowUp' || c === 38 || c === 19 || k === 'w' || k === 'W') return 'up';
+    if (k === 'ArrowDown' || c === 40 || c === 20 || k === 's' || k === 'S') return 'down';
+    if (k === 'Enter' || c === 13 || c === 23 || k === ' ' || c === 32 || k === 'Select' || c === 96 || k === 'z' || k === 'Z') return 'ok';
+    if (k === 'Escape' || c === 27 || c === 8 || c === 4 || c === 461 || c === 10009 || c === 10182 || c === 97 || k === 'GoBack' || k === 'BrowserBack') return 'back';
+    if (k === '1' || c === 403 || k === 'q' || k === 'Q') return 'k1';
+    if (k === '2' || c === 405) return 'k2';
+    if (k === '3' || c === 404 || k === 'e' || k === 'E') return 'k3';
+    if (k === '4' || c === 406 || k === 'h' || k === 'H') return 'k4';
+    if (k === 'v' || k === 'V') return 'view';
+    if (k === 'p' || k === 'P' || c === 80 || c === 108 || c === 415 || c === 179) return 'start';
+    return '';
+  }
+  function fire(type, key, rep) {
+    if (type === 'down') { if (!rep) held[key] = true; } else held[key] = false;
+    for (var i = 0; i < handlers.length; i++) { try { handlers[i](type, key, !!rep); } catch (err) { if (window.console) console.error(err); } }
+  }
+  T.on = function (fn) { handlers.push(fn); };
+  T.fire = fire;
+  window.addEventListener('keydown', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('down', k, e.repeat);
+  }, false);
+  window.addEventListener('keyup', function (e) {
+    var k = norm(e); if (!k) return;
+    e.preventDefault(); fire('up', k, false);
+  }, false);
+
+  /* Touch pad for phones and tablets */
+  window.addEventListener('touchstart', function () { document.documentElement.className = 'touch'; T.fit(); }, false);
+  var btns = document.querySelectorAll('.pb');
+  for (var i = 0; i < btns.length; i++) (function (b) {
+    var k = b.getAttribute('data-k');
+    function on(e) { e.preventDefault(); b.className = 'pb on'; fire('down', k, false); }
+    function off(e) { e.preventDefault(); b.className = 'pb'; fire('up', k, false); }
+    b.addEventListener('touchstart', on, false); b.addEventListener('touchend', off, false); b.addEventListener('touchcancel', off, false);
+    b.addEventListener('mousedown', on, false); b.addEventListener('mouseup', off, false); b.addEventListener('mouseleave', off, false);
+  })(btns[i]);
+  document.getElementById('exit').addEventListener('click', function () { T.exit(); }, false);
+
+  T.exit = function () { window.location.href = 'index.html'; };
+
+  /* Scale the 960x540 canvas to fit the screen */
+  T.fit = function () {
+    var r = Math.min(window.innerWidth / T.W, window.innerHeight / T.H);
+    cv.style.width = Math.floor(T.W * r) + 'px'; cv.style.height = Math.floor(T.H * r) + 'px';
+  };
+  window.addEventListener('resize', T.fit, false); T.fit();
+
+
+  /* 2D / 3D view: ?v=2d or ?v=3d, remembered, default 3d. Press V (or the 2D/3D pad button) to switch. */
+  T.view = function () {
+    var m = /[?&]v=(2d|3d)/.exec(window.location.search);
+    if (m) return m[1];
+    return T.store.get('view', '3d') === '2d' ? '2d' : '3d';
+  };
+  T.dual = false;
+  T.pick = function (d2, d3) {
+    T.dual = true; var vw = document.getElementById('vw'); if (vw) vw.style.display = '';
+    return function () { if (T.view() === '2d') d2(); else d3(); };
+  };
+  T.on(function (type, key) {
+    if (type !== 'down' || key !== 'view' || !T.dual) return;
+    var n = T.view() === '2d' ? '3d' : '2d'; T.store.set('view', n);
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', window.location.pathname); } catch (e) { /* ignore */ } }
+    T.toast('View: ' + n.toUpperCase(), 1500);
+  });
+
+  T.loop = function (update, draw) {
+    var last = 0;
+    function frame(now) {
+      if (!last) last = now;
+      var dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+      update(dt); draw();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  };
+
+  T.toast = function (msg, ms) {
+    var el = document.getElementById('toast'); el.textContent = msg; el.style.opacity = 1;
+    clearTimeout(T._tt); T._tt = setTimeout(function () { el.style.opacity = 0; }, ms || 4000);
+  };
+
+  T.store = {
+    get: function (k, d) { try { var v = window.localStorage.getItem('tvarcade_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { window.localStorage.setItem('tvarcade_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+  };
+
+  T.ac = function () { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; } catch (e) { return null; } };
+  T.setMuted = function (m) { muted = !!m; };
+  T.isMuted = function () { return muted; };
+  T.beep = function (freq, dur, type, vol, slide) {
+    if (muted) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.linearRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.1, t); g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) { /* no audio */ }
+  };
+
+  /* Text with a dark outline so it reads on any background */
+  T.text = function (s, x, y, size, color, align) {
+    var c = T.ctx; c.font = 'bold ' + size + 'px Arial, Helvetica, sans-serif'; c.textAlign = align || 'center'; c.textBaseline = 'middle';
+    c.lineWidth = Math.max(3, size / 6); c.strokeStyle = 'rgba(8,12,40,.85)'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+    c.fillStyle = color || '#fff'; c.fillText(s, x, y);
+  };
+  T.panel = function (title, lines, accent) {
+    var c = T.ctx; c.fillStyle = 'rgba(8,12,40,.72)'; c.fillRect(0, 0, T.W, T.H);
+    T.text(title, T.W / 2, T.H * 0.30, 64, accent || '#ffd21f');
+    for (var i = 0; i < lines.length; i++) T.text(lines[i], T.W / 2, T.H * 0.46 + i * 38, 26, '#dfe5ff');
+  };
+  T.rnd = function (a, b) { return a + Math.random() * (b - a); };
+  T.clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  window.setTimeout(function () { T.toast(T.hint, 6000); }, 600);
+  return T;
+})();
+</script>
+<script>
+(function () {
+  var c = TV.ctx, W = TV.W, H = TV.H, SPEED = 1;
+  var COL = [
+    { n: 'Red', m: '#e53935', d: '#9e1f1c', l: '#ffd9d6' }, { n: 'Green', m: '#43a047', d: '#1f6b24', l: '#d4f0d6' },
+    { n: 'Yellow', m: '#fbc02d', d: '#a87c00', l: '#fff3c4' }, { n: 'Blue', m: '#1e88e5', d: '#0f4f94', l: '#d2e8fb' }
+  ];
+  var S = 34, OX = 14, OY = 15;                    /* board: 15 x 15 cells of 34 px */
+  var TRACK = [], HOMECOL = [[], [], [], []], BASEOFF = [[0, 0], [9, 0], [9, 9], [0, 9]], SPOT = [[2, 2], [4, 2], [2, 4], [4, 4]];
+  (function () {
+    function add(r, cn, dr, dc, n) { for (var i = 0; i < n; i++) TRACK.push([r + dr * i, cn + dc * i]); }
+    add(6, 1, 0, 1, 5); add(5, 6, -1, 0, 6); add(0, 7, 0, 1, 2); add(1, 8, 1, 0, 5); add(6, 9, 0, 1, 6); add(7, 14, 1, 0, 2);
+    add(8, 13, 0, -1, 5); add(9, 8, 1, 0, 6); add(14, 7, 0, -1, 2); add(13, 6, -1, 0, 5); add(8, 5, 0, -1, 6); add(7, 0, -1, 0, 2);
+    for (var k = 0; k < 5; k++) { HOMECOL[0].push([7, 1 + k]); HOMECOL[1].push([1 + k, 7]); HOMECOL[2].push([7, 13 - k]); HOMECOL[3].push([13 - k, 7]); }
+  })();
+  var FIN = [[6.85, 7.5], [7.5, 6.85], [8.15, 7.5], [7.5, 8.15]];
+  var PIPS = [[], [[0, 0]], [[-1, -1], [1, 1]], [[-1, -1], [0, 0], [1, 1]], [[-1, -1], [1, -1], [-1, 1], [1, 1]], [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]]];
+
+  var seats = TV.store.get('ludo_seats', [1, 0, 2, 0]);      /* 0 off, 1 person, 2 computer */
+  if (!seats || seats.length !== 4) seats = [1, 0, 2, 0];
+  var mode = 'setup', t = 0, ssel = 0, cur = 0, phase = 'roll', dice = 1, rollT = 0, wait = 0, sixes = 0, extra = false, msg = '', msgT = 0;
+  var tok = [], movable = [], sel = 0, anim = null, finished = [false, false, false, false], ranks = [], parts = [], shown = 1, capt = false, homed = false;
+
+  function rnd(n) { return Math.floor(Math.random() * n); }
+  function active(i) { return seats[i] !== 0; }
+  function isCpu(i) { return seats[i] === 2; }
+  function say(s, secs) { msg = s; msgT = secs || 2.2; }
+
+  /* ------------------------------------------------------------ rules */
+  function cellIdx(col, p) { return p >= 0 && p <= 50 ? (13 * col + p) % 52 : -1; }
+  function safeIdx(idx) { return idx % 13 === 0 || idx % 13 === 8; }          /* start squares and star squares */
+  function legal(col, r) {
+    var out = [], i, p;
+    for (i = 0; i < 4; i++) { p = tok[col][i].p; if (p === -1 ? r === 6 : p + r <= 56) out.push(i); }
+    return out;
+  }
+  function target(col, i) { var p = tok[col][i].p; return p === -1 ? 0 : p + dice; }
+  function oppAt(col, idx) {
+    var o, i, out = [];
+    for (o = 0; o < 4; o++) if (o !== col && active(o)) for (i = 0; i < 4; i++) if (cellIdx(o, tok[o][i].p) === idx) out.push([o, i]);
+    return out;
+  }
+  function danger(col, idx) {          /* how many opponent tokens could reach this square with one roll */
+    var o, i, n = 0, d, q;
+    if (idx < 0 || safeIdx(idx)) return 0;
+    for (o = 0; o < 4; o++) if (o !== col && active(o)) for (i = 0; i < 4; i++) {
+      q = cellIdx(o, tok[o][i].p); if (q < 0) continue;
+      d = (idx - q + 52) % 52; if (d >= 1 && d <= 6) n++;
+    }
+    return n;
+  }
+  function aiPick(col) {
+    var best = -1, bs = -1e9, i, np, sc, idx, here;
+    for (i = 0; i < movable.length; i++) {
+      var k = movable[i], p = tok[col][k].p; np = target(col, k); sc = np * 0.3 + Math.random() * 3; idx = cellIdx(col, np); here = cellIdx(col, p);
+      if (np === 56) sc += 100;
+      if (idx >= 0 && !safeIdx(idx) && oppAt(col, idx).length) sc += 80;
+      if (p === -1) sc += 50;
+      if (here >= 0 && danger(col, here)) sc += 28;
+      if (idx >= 0 && safeIdx(idx)) sc += 18;
+      if (idx >= 0) sc -= 22 * danger(col, idx);
+      if (np >= 51 && np < 56) sc += 12;
+      if (sc > bs) { bs = sc; best = i; }
+    }
+    return best;
+  }
+
+  /* ------------------------------------------------------------ turn flow */
+  function newGame() {
+    var i, j;
+    tok = []; finished = [false, false, false, false]; ranks = []; parts = []; anim = null; extra = false; sixes = 0; msg = '';
+    for (i = 0; i < 4; i++) { tok.push([]); for (j = 0; j < 4; j++) tok[i].push({ p: -1, dp: -1 }); }
+    cur = -1; for (i = 0; i < 4; i++) if (active(i)) { cur = i; break; }
+    mode = 'play'; beginTurn();
+  }
+  function beginTurn() {
+    phase = 'roll'; wait = isCpu(cur) ? 0.8 : 0; movable = []; sel = 0;
+    if (!isCpu(cur)) TV.beep(660, 0.08, 'triangle', 0.08);
+  }
+  function startRoll() { phase = 'rolling'; rollT = 0.75; TV.beep(300, 0.06, 'square', 0.05); }
+  function handleRolled() {
+    shown = dice;
+    if (dice === 6) sixes++; else sixes = 0;
+    if (sixes >= 3) { say('Three sixes! Turn lost.', 1.8); sixes = 0; extra = false; phase = 'pass'; wait = 1.2; return; }
+    movable = legal(cur, dice); sel = 0;
+    if (!movable.length) { say(COL[cur].n + ': no move', 1.4); extra = false; phase = 'pass'; wait = 1.0; return; }
+    phase = 'pick'; wait = movable.length === 1 || isCpu(cur) ? 0.7 : 0;
+  }
+  function doMove(i) {
+    var tk = tok[cur][i], to = target(cur, i), from = tk.p;
+    anim = { i: i, from: from, to: to, t: 0, dur: from === -1 ? 0.4 : Math.max(0.3, (to - from) * 0.14) };
+    phase = 'moving'; movable = [];
+  }
+  function puff(x, y, col) {
+    for (var k = 0; k < 22; k++) { var a = Math.random() * 6.283, sp = 60 + Math.random() * 160; parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, col: col, r: 3 + Math.random() * 3, life: 0.9 }); }
+  }
+  function px(pos) { return OX + pos[0] * S; }
+  function py(pos) { return OY + pos[1] * S; }
+  function finishMove() {
+    var tk = tok[cur][anim.i], idx, hit, k, i, all = true;
+    tk.p = anim.to; tk.dp = anim.to; capt = false; homed = false;
+    idx = cellIdx(cur, tk.p);
+    if (idx >= 0 && !safeIdx(idx)) {
+      hit = oppAt(cur, idx);
+      for (k = 0; k < hit.length; k++) { var ot = tok[hit[k][0]][hit[k][1]]; var pos = posAt(hit[k][0], ot.p, hit[k][1]); puff(px(pos), py(pos), COL[hit[k][0]].m); ot.p = -1; ot.dp = -1; capt = true; }
+      if (capt) { say(COL[cur].n + ' sent ' + COL[hit[0][0]].n + ' home!', 2); TV.beep(180, 0.3, 'sawtooth', 0.1, 90); }
+    }
+    if (tk.p === 56) { homed = true; say(COL[cur].n + ' token is home!', 1.8); TV.beep(784, 0.2, 'triangle', 0.1); var q = posAt(cur, 56, anim.i); puff(px(q), py(q), COL[cur].m); }
+    else if (!capt) TV.beep(440, 0.05, 'triangle', 0.07);
+    extra = dice === 6 || capt || homed;
+    for (i = 0; i < 4; i++) if (tok[cur][i].p !== 56) all = false;
+    if (all) {
+      finished[cur] = true; ranks.push(cur); extra = false;
+      say(COL[cur].n + ' finished #' + ranks.length + '!', 2.4); TV.beep(523, 0.15, 'triangle', 0.1); setTimeout(function () { TV.beep(784, 0.3, 'triangle', 0.1); }, 160);
+    }
+    anim = null; phase = 'pass'; wait = 0.5;
+  }
+  function nextTurn() {
+    var left = 0, i, n;
+    for (i = 0; i < 4; i++) if (active(i) && !finished[i]) left++;
+    if (left <= 1) { for (i = 0; i < 4; i++) if (active(i) && !finished[i]) { ranks.push(i); finished[i] = true; } mode = 'over'; TV.beep(659, 0.3, 'triangle', 0.12); return; }
+    if (extra && !finished[cur]) { say(COL[cur].n + ' rolls again', 1.2); beginTurn(); return; }
+    sixes = 0; n = cur;
+    do { n = (n + 1) % 4; } while (!active(n) || finished[n]);
+    cur = n; beginTurn();
+  }
+
+  TV.on(function (type, key, rep) {
+    if (type !== 'down') return;
+    var i;
+    if (mode === 'setup') {
+      if (key === 'back') { TV.exit(); return; }
+      if (key === 'up') ssel = (ssel + 3) % 4; else if (key === 'down') ssel = (ssel + 1) % 4;
+      else if (key === 'left' || key === 'right') { var order = [1, 2, 0], k = order.indexOf(seats[ssel]); k = (k + (key === 'right' ? 1 : 2)) % 3; seats[ssel] = order[k]; TV.beep(440, 0.04, 'triangle', 0.07); }
+      else if (key === 'ok') {
+        var np = 0, nh = 0; for (i = 0; i < 4; i++) { if (seats[i]) np++; if (seats[i] === 1) nh++; }
+        if (np < 2) { TV.toast('Pick at least two players', 2000); return; }
+        if (nh < 1) { TV.toast('At least one seat must be a person', 2000); return; }
+        TV.store.set('ludo_seats', seats); newGame();
+      }
+      return;
+    }
+    if (mode === 'over') { if (key === 'ok' || key === 'back') mode = 'setup'; return; }
+    if (mode === 'pause') { if (key === 'ok' || key === 'start') mode = 'play'; else if (key === 'back') mode = 'setup'; return; }
+    if (key === 'back' || key === 'start') { mode = 'pause'; return; }
+    if (isCpu(cur)) return;
+    if (phase === 'roll' && key === 'ok') startRoll();
+    else if (phase === 'pick' && movable.length > 1) {
+      if (key === 'left' || key === 'up') { sel = (sel + movable.length - 1) % movable.length; TV.beep(500, 0.03, 'triangle', 0.06); }
+      else if (key === 'right' || key === 'down') { sel = (sel + 1) % movable.length; TV.beep(500, 0.03, 'triangle', 0.06); }
+      else if (key === 'ok') doMove(movable[sel]);
+    }
+  });
+
+  function update(dt) {
+    dt *= SPEED; t += dt; var i;
+    if (msgT > 0) msgT -= dt;
+    for (i = parts.length - 1; i >= 0; i--) { var p = parts[i]; p.life -= dt; p.vy += 400 * dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+    if (mode !== 'play') return;
+    if (phase === 'roll') { if (isCpu(cur)) { wait -= dt; if (wait <= 0) startRoll(); } }
+    else if (phase === 'rolling') {
+      rollT -= dt; shown = 1 + rnd(6);
+      if (rollT <= 0) { dice = 1 + rnd(6); handleRolled(); }
+    }
+    else if (phase === 'pick') {
+      if (isCpu(cur) || movable.length === 1) { wait -= dt; if (wait <= 0) doMove(movable[isCpu(cur) ? aiPick(cur) : 0]); }
+    }
+    else if (phase === 'moving') {
+      anim.t += dt; var k = Math.min(1, anim.t / anim.dur), tk = tok[cur][anim.i];
+      tk.dp = anim.from + (anim.to - anim.from) * k;
+      if (k >= 1) finishMove();
+    }
+    else if (phase === 'pass') { wait -= dt; if (wait <= 0) nextTurn(); }
+  }
+
+  /* ------------------------------------------------------------ drawing */
+  function rr(x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r); c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h); c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r); c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath(); }
+  function star(x, y, r, col) {
+    c.fillStyle = col; c.beginPath();
+    for (var i = 0; i < 10; i++) { var a = -Math.PI / 2 + i * Math.PI / 5, rad = i % 2 ? r * 0.45 : r; c.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad); }
+    c.closePath(); c.fill();
+  }
+  function posAt(col, p, i) {            /* centre of a square, in cell units */
+    var q;
+    if (p < 0) return [BASEOFF[col][0] + SPOT[i][0], BASEOFF[col][1] + SPOT[i][1]];
+    if (p <= 50) { q = TRACK[(13 * col + p) % 52]; return [q[1] + 0.5, q[0] + 0.5]; }
+    if (p <= 55) { q = HOMECOL[col][p - 51]; return [q[1] + 0.5, q[0] + 0.5]; }
+    return [FIN[col][0] + (i - 1.5) * (col % 2 ? 0.22 : 0), FIN[col][1] + (i - 1.5) * (col % 2 ? 0 : 0.22)];
+  }
+  function tokPos(col, i) {              /* may be between two squares while moving */
+    var dp = tok[col][i].dp, a = Math.floor(dp), b = Math.ceil(dp), pa = posAt(col, a, i), pb = posAt(col, b, i), f = dp - a, lift = 0;
+    if (anim && anim.i === i && col === cur && b !== a) lift = Math.sin(f * Math.PI) * 0.35;
+    return [pa[0] + (pb[0] - pa[0]) * f, pa[1] + (pb[1] - pa[1]) * f - lift];
+  }
+  function cell(r, cn, fill) { c.fillStyle = fill; c.fillRect(OX + cn * S, OY + r * S, S, S); c.strokeStyle = 'rgba(0,0,0,0.28)'; c.lineWidth = 1; c.strokeRect(OX + cn * S + 0.5, OY + r * S + 0.5, S - 1, S - 1); }
+  function drawBoard() {
+    var i, k, q, col;
+    rr(OX - 8, OY - 8, S * 15 + 16, S * 15 + 16, 14); c.fillStyle = '#10162e'; c.fill();
+    for (i = 0; i < 4; i++) {
+      var bx = OX + BASEOFF[i][0] * S, by = OY + BASEOFF[i][1] * S, act = active(i);
+      c.fillStyle = act ? COL[i].m : '#6b7188'; c.fillRect(bx, by, 6 * S, 6 * S);
+      c.fillStyle = act ? '#fff' : '#d8dbe6'; rr(bx + S, by + S, 4 * S, 4 * S, 12); c.fill();
+      for (k = 0; k < 4; k++) { c.fillStyle = act ? COL[i].l : '#bfc3d3'; c.beginPath(); c.arc(bx + SPOT[k][0] * S, by + SPOT[k][1] * S, S * 0.5, 0, 6.283); c.fill(); c.strokeStyle = act ? COL[i].m : '#8b90a6'; c.lineWidth = 2; c.stroke(); }
+    }
+    for (i = 0; i < 52; i++) { q = TRACK[i]; cell(q[0], q[1], i % 13 === 0 ? COL[i / 13].m : '#fffdf5'); }
+    for (i = 0; i < 4; i++) for (k = 0; k < 5; k++) { q = HOMECOL[i][k]; cell(q[0], q[1], active(i) ? COL[i].m : '#8b90a6'); }
+    for (i = 0; i < 52; i++) if (i % 13 === 8) { q = TRACK[i]; star(OX + (q[1] + 0.5) * S, OY + (q[0] + 0.5) * S, S * 0.36, '#c9a227'); }
+    for (i = 0; i < 4; i++) { q = TRACK[13 * i]; star(OX + (q[1] + 0.5) * S, OY + (q[0] + 0.5) * S, S * 0.3, 'rgba(255,255,255,0.85)'); }
+    /* centre */
+    var cx = OX + 7.5 * S, cy = OY + 7.5 * S, x0 = OX + 6 * S, y0 = OY + 6 * S, x1 = OX + 9 * S, y1 = OY + 9 * S, tri = [[x0, y0, x0, y1], [x0, y0, x1, y0], [x1, y0, x1, y1], [x0, y1, x1, y1]];
+    for (i = 0; i < 4; i++) { c.fillStyle = active(i) ? COL[i].m : '#8b90a6'; c.beginPath(); c.moveTo(tri[i][0], tri[i][1]); c.lineTo(tri[i][2], tri[i][3]); c.lineTo(cx, cy); c.closePath(); c.fill(); }
+    c.strokeStyle = 'rgba(0,0,0,0.35)'; c.lineWidth = 2; c.strokeRect(x0, y0, 3 * S, 3 * S);
+    /* whose turn: a pulsing frame around that colour's yard */
+    if (mode === 'play' || mode === 'pause') {
+      c.strokeStyle = 'rgba(255,255,255,' + (0.55 + 0.4 * Math.sin(t * 6)) + ')'; c.lineWidth = 4;
+      c.strokeRect(OX + BASEOFF[cur][0] * S + 2, OY + BASEOFF[cur][1] * S + 2, 6 * S - 4, 6 * S - 4);
+    }
+  }
+  function drawToken(col, i, x, y, r, ring) {
+    c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(x, y + r * 0.8, r * 0.85, r * 0.35, 0, 0, 6.283); c.fill();
+    c.fillStyle = COL[col].d; c.beginPath(); c.arc(x, y, r, 0, 6.283); c.fill();
+    c.fillStyle = COL[col].m; c.beginPath(); c.arc(x, y - 1.5, r - 2.5, 0, 6.283); c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.45)'; c.beginPath(); c.ellipse(x - r * 0.3, y - r * 0.4, r * 0.3, r * 0.2, -0.6, 0, 6.283); c.fill();
+    c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(x, y - 1.5, r - 2.5, 0, 6.283); c.stroke();
+    if (ring) { c.strokeStyle = ring; c.lineWidth = 3; c.beginPath(); c.arc(x, y - 1.5, r + 4 + Math.sin(t * 8) * 1.5, 0, 6.283); c.stroke(); }
+  }
+  function drawTokens() {
+    var list = [], col, i, k, groups = {}, key, g;
+    for (col = 0; col < 4; col++) if (active(col)) for (i = 0; i < 4; i++) {
+      var pp = tokPos(col, i); key = Math.round(pp[0] * 3) + ',' + Math.round(pp[1] * 3);
+      list.push({ col: col, i: i, x: pp[0], y: pp[1], key: key });
+    }
+    for (k = 0; k < list.length; k++) { g = groups[list[k].key] = groups[list[k].key] || []; g.push(list[k]); }
+    for (k = 0; k < list.length; k++) { g = groups[list[k].key]; list[k].off = g.length > 1 ? (g.indexOf(list[k]) - (g.length - 1) / 2) * 0.28 : 0; list[k].sc = g.length > 1 ? 0.78 : 1; }
+    /* where the chosen token will land */
+    if (mode === 'play' && phase === 'pick' && !isCpu(cur) && movable.length > 1) {
+      var dest = posAt(cur, target(cur, movable[sel]), movable[sel]);
+      c.strokeStyle = 'rgba(255,255,255,0.9)'; c.setLineDash ? c.setLineDash([5, 4]) : 0; c.lineWidth = 3;
+      c.beginPath(); c.arc(px(dest), py(dest), S * 0.42, 0, 6.283); c.stroke(); if (c.setLineDash) c.setLineDash([]);
+    }
+    list.sort(function (a, b) { return (a.y + a.off) - (b.y + b.off); });
+    for (k = 0; k < list.length; k++) {
+      var o = list[k], ring = null, bounce = 0, isSel = false, m;
+      if (mode === 'play' && phase === 'pick' && o.col === cur && !isCpu(cur)) {
+        for (m = 0; m < movable.length; m++) if (movable[m] === o.i) { ring = 'rgba(255,255,255,0.65)'; bounce = Math.abs(Math.sin(t * 6)) * 3; if (movable.length > 1 && m === sel) { isSel = true; ring = '#ffffff'; } }
+      }
+      var X = OX + (o.x + o.off) * S, Y = OY + o.y * S - bounce;
+      drawToken(o.col, o.i, X, Y, S * 0.36 * o.sc, ring);
+      if (isSel) { c.fillStyle = '#fff'; c.beginPath(); c.moveTo(X, Y - S * 0.62); c.lineTo(X - 8, Y - S * 0.92); c.lineTo(X + 8, Y - S * 0.92); c.closePath(); c.fill(); }
+    }
+  }
+  function drawDice(x, y, size, v, col, wob) {
+    c.save(); c.translate(x + size / 2, y + size / 2); if (wob) c.rotate(Math.sin(t * 30) * 0.25);
+    c.fillStyle = 'rgba(0,0,0,0.3)'; rr(-size / 2 + 3, -size / 2 + 5, size, size, 16); c.fill();
+    c.fillStyle = '#fff'; rr(-size / 2, -size / 2, size, size, 16); c.fill(); c.strokeStyle = col; c.lineWidth = 5; c.stroke();
+    c.fillStyle = '#1a1f3a';
+    for (var i = 0; i < PIPS[v].length; i++) { c.beginPath(); c.arc(PIPS[v][i][0] * size * 0.25, PIPS[v][i][1] * size * 0.25, size * 0.075, 0, 6.283); c.fill(); }
+    c.restore();
+  }
+  function seatName(i) { return COL[i].n + (seats[i] === 2 ? ' (computer)' : ''); }
+  function drawPanel() {
+    var X = 560, i, y, r;
+    rr(X, 14, 386, 512, 18); c.fillStyle = 'rgba(8,12,34,0.55)'; c.fill();
+    var c0 = COL[cur];
+    rr(X + 14, 26, 358, 54, 14); c.fillStyle = c0.m; c.fill();
+    TV.text(seatName(cur) + (phase === 'roll' && !isCpu(cur) ? ': your turn' : ''), X + 193, 54, 28, '#fff', 'center');
+    drawDice(X + 40, 100, 110, phase === 'rolling' ? shown : dice, c0.m, phase === 'rolling');
+    if (sixes > 0 && phase !== 'rolling') TV.text('Sixes in a row: ' + sixes, X + 268, 150, 20, '#fff', 'center');
+    var hint = '';
+    if (phase === 'roll') hint = isCpu(cur) ? 'Computer is thinking...' : 'Press OK to roll';
+    else if (phase === 'rolling') hint = 'Rolling...';
+    else if (phase === 'pick') hint = isCpu(cur) ? 'Computer is choosing' : movable.length > 1 ? 'Left / Right: choose.  OK: move' : 'Moving...';
+    else if (phase === 'pass' || phase === 'moving') hint = '';
+    TV.text(hint, X + 193, 202, 19, '#dfe5ff', 'center');
+    if (msgT > 0 && msg) { rr(X + 14, 226, 358, 40, 12); c.fillStyle = 'rgba(255,255,255,0.92)'; c.fill(); c.font = 'bold 19px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#23304f'; c.fillText(msg, X + 193, 247); }
+    y = 290;
+    for (i = 0; i < 4; i++) {
+      if (!active(i)) continue;
+      var home = 0, k; for (k = 0; k < 4; k++) if (tok[i][k].p === 56) home++;
+      rr(X + 14, y, 358, 50, 12); c.fillStyle = i === cur ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)'; c.fill();
+      drawToken(i, 0, X + 44, y + 25, 13, null);
+      TV.text(seatName(i), X + 70, y + 25, 20, '#fff', 'left');
+      var rk = ranks.indexOf(i);
+      TV.text(rk >= 0 ? '#' + (rk + 1) : 'Home ' + home + '/4', X + 360, y + 25, 20, rk >= 0 ? '#ffd21f' : '#fff', 'right');
+      y += 58;
+    }
+  }
+  function drawSetup() {
+    var i, y;
+    TV.text('LUDO', W / 2, 62, 62, '#ffd21f', 'center');
+    TV.text('Who is playing?', W / 2, 112, 26, '#fff', 'center');
+    for (i = 0; i < 4; i++) {
+      y = 150 + i * 70; var f = ssel === i;
+      rr(210, y, 540, 60, 16); c.fillStyle = f ? 'rgba(255,255,255,0.26)' : 'rgba(255,255,255,0.1)'; c.fill();
+      if (f) { c.strokeStyle = '#fff'; c.lineWidth = 4; c.stroke(); }
+      drawToken(i, 0, 258, y + 30, 18, null);
+      TV.text(COL[i].n, 300, y + 30, 28, '#fff', 'left');
+      var lab = seats[i] === 1 ? 'Person' : seats[i] === 2 ? 'Computer' : 'Off';
+      TV.text('◀  ' + lab + '  ▶', 640, y + 30, 26, seats[i] === 0 ? '#9aa3c7' : '#fff', 'center');
+    }
+    TV.text('Up / Down: seat    Left / Right: person, computer or off', W / 2, 452, 20, '#dfe5ff', 'center');
+    TV.text('OK: start       1 person + 1 computer is a 2-player game', W / 2, 482, 20, '#dfe5ff', 'center');
+  }
+  function draw() {
+    var g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1a2a66'); g.addColorStop(1, '#0b1030'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    var i;
+    if (mode === 'setup') { drawSetup(); return; }
+    drawBoard(); drawTokens(); drawPanel();
+    for (i = 0; i < parts.length; i++) { c.globalAlpha = Math.max(0, parts[i].life); c.fillStyle = parts[i].col; c.fillRect(parts[i].x, parts[i].y, parts[i].r, parts[i].r); }
+    c.globalAlpha = 1;
+    if (mode === 'pause') TV.panel('PAUSED', ['OK: continue', 'Back: quit to the player setup'], COL[cur].m);
+    if (mode === 'over') {
+      var lines = [];
+      for (i = 0; i < ranks.length; i++) lines.push('#' + (i + 1) + '  ' + seatName(ranks[i]));
+      lines.push('OK: play again');
+      TV.panel(COL[ranks[0]].n.toUpperCase() + ' WINS!', lines, COL[ranks[0]].m);
+    }
+  }
+  TV.loop(update, draw);
+})();
+</script>
+
+</body></html>

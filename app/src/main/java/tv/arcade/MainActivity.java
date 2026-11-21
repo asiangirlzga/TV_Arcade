@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
         if (!base.endsWith("/")) base = base + "/";
         lastSync = now; syncBytes = 0; pending.clear();
         deleteTree(new File(getFilesDir(), "games_new"));
-        syncStatus = "Checking for new games...";
+        syncStatus = "Checking for updates...";
         final WebView w = new WebView(this);
         syncWeb = w;
         WebSettings s = w.getSettings();
@@ -241,7 +241,7 @@ public class MainActivity extends Activity {
                 return host == null || rh == null || !rh.equalsIgnoreCase(host);
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-                if (r.isForMainFrame()) endSync("Could not reach the online arcade", false);
+                if (r.isForMainFrame()) endSync("Could not reach " + host + " (" + e.getDescription() + ")", false);
             }
         });
         w.loadUrl(base + "sync.php");
@@ -292,13 +292,18 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception ignored) { }
         }
-        @JavascriptInterface public void commit(final String manifestJson) {
+        @JavascriptInterface public void commit(final String manifestJson) { doCommit(manifestJson, 0, "", -1); }
+        /** The newer sync page also says how many downloads failed and passes a note for the status line. */
+        @JavascriptInterface public void commit2(final String manifestJson, final int failed, final String note, final int got) { doCommit(manifestJson, failed, note == null ? "" : note, got); }
+        private void doCommit(final String manifestJson, final int failedN, final String note, final int gotN) {
             ui.post(new Runnable() { public void run() {
                 try {
                     JSONArray list = new JSONArray(manifestJson), old = readMeta(), out = new JSONArray();
                     java.util.Set<String> keep = new java.util.HashSet<String>();
                     int added = 0, updated = 0; String addedName = "", updatedName = "";
                     long nowMs = System.currentTimeMillis();
+                    boolean oldSite = true;                                       // an old sync.php lists only uploaded games, never the built-in ones
+                    for (int i = 0; i < list.length(); i++) { JSONObject b = list.getJSONObject(i); if (b.optBoolean("builtin", false) || b.optInt("builtin", 0) == 1) oldSite = false; }
                     for (int i = 0; i < list.length(); i++) {
                         JSONObject g = list.getJSONObject(i);
                         String slug = g.getString("slug");
@@ -306,16 +311,18 @@ public class MainActivity extends Activity {
                         File fresh = new File(getFilesDir(), "games_new/" + slug), dest = new File(gamesDir(), slug);
                         long at = nowMs; boolean existed = false; String oldVer = "";
                         for (int k = 0; k < old.length(); k++) if (old.getJSONObject(k).getString("slug").equals(slug)) { at = old.getJSONObject(k).optLong("at", nowMs); existed = true; oldVer = old.getJSONObject(k).optString("ver", ""); }
+                        String verNow = g.getString("ver");
                         if (fresh.isDirectory()) {
                             gamesDir().mkdirs();
                             deleteTree(dest);
                             if (!fresh.renameTo(dest)) continue;
                         } else if (!new File(dest, "index.html").exists()) continue;
+                        else verNow = existed ? oldVer : verNow;          // not downloaded this time: keep the old copy and its version, so the next check tries again
                         if (!existed) { added++; addedName = g.optString("name", slug); }
-                        else if (!oldVer.equals(g.getString("ver"))) { updated++; updatedName = g.optString("name", slug); }
+                        else if (fresh.isDirectory() && !oldVer.equals(g.getString("ver"))) { updated++; updatedName = g.optString("name", slug); }
                         JSONObject m = new JSONObject();
                         m.put("slug", slug); m.put("name", g.optString("name", slug)); m.put("desc", g.optString("desc", ""));
-                        m.put("hint", g.optString("hint", "")); m.put("color", g.optString("color", "#8a7dff")); m.put("ver", g.getString("ver")); m.put("at", at); m.put("builtin", g.optBoolean("builtin", g.optInt("builtin", 0) == 1));
+                        m.put("hint", g.optString("hint", "")); m.put("color", g.optString("color", "#8a7dff")); m.put("ver", verNow); m.put("at", at); m.put("builtin", g.optBoolean("builtin", g.optInt("builtin", 0) == 1));
                         out.put(m); keep.add(slug);
                     }
                     File[] dirs = gamesDir().listFiles();                         // games removed or hidden online disappear here too
@@ -326,8 +333,13 @@ public class MainActivity extends Activity {
                     else if (added > 1) Toast.makeText(MainActivity.this, added + " new games added", Toast.LENGTH_LONG).show();
                     else if (updated == 1) Toast.makeText(MainActivity.this, "Updated: " + updatedName, Toast.LENGTH_LONG).show();
                     else if (updated > 1) Toast.makeText(MainActivity.this, updated + " games updated", Toast.LENGTH_LONG).show();
-                    endSync(out.length() + " downloaded game" + (out.length() == 1 ? "" : "s") + " on this TV. Checked just now.", changed || added > 0 || updated > 0);
-                } catch (Exception e) { endSync("Update failed", false); }
+                    String when = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(new java.util.Date());
+                    String st = added + updated > 0 ? ("Updated " + (added + updated) + " game" + (added + updated == 1 ? "" : "s") + " at " + when) : ("Up to date, checked " + when);
+                    if (failedN > 0) st += ". " + failedN + " download" + (failedN == 1 ? "" : "s") + " failed, will retry";
+                    if (note.length() > 0) st += ". " + note;
+                    if (oldSite) st += ". The website still has the OLD sync.php. Upload the newest sync.php to get new games live.";
+                    endSync(st, changed || added > 0 || updated > 0);
+                } catch (Exception e) { endSync("Update failed: " + e.getClass().getSimpleName(), false); }
             } });
         }
         @JavascriptInterface public void fail(final String msg) {
